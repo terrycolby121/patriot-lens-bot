@@ -30,4 +30,6 @@ def fetch_headlines(country="us", category="politics", page_size=5):
         for a in resp.json()["articles"]
     ]
     print("Fetched", len(articles), "headlines")
+    for art in articles:
+        print("-", art["title"], "|", art["summary"])
     return articles

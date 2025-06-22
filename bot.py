@@ -1,4 +1,5 @@
 import os
+import random
 import tweepy
 from dotenv import load_dotenv
 from news_fetcher import fetch_headlines
@@ -23,15 +24,24 @@ def authenticate_twitter():
         wait_on_rate_limit=True,
     )
 
-def post_latest_tweets(api, count=1):
+def post_latest_tweets(api):
+    """Fetch headlines and tweet one chosen at random."""
     headlines = fetch_headlines()
-    for title in headlines[:count]:
-        tweet = craft_tweet(title)
-        try:
-            api.create_tweet(text=tweet)
-            print("Posted:", tweet)
-        except Exception as e:
-            print("Error posting:", e)
+
+    if not headlines:
+        print("No headlines returned")
+        return
+
+    choice = random.choice(headlines)
+    # Each item from fetch_headlines is a dict with a title key
+    headline = choice.get("title") if isinstance(choice, dict) else choice
+
+    tweet = craft_tweet(headline)
+    try:
+        api.create_tweet(text=tweet)
+        print("Posted:", tweet)
+    except Exception as e:
+        print("Error posting:", e)
 
 if __name__ == "__main__":
     api = authenticate_twitter()
