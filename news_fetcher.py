@@ -3,15 +3,16 @@ from datetime import datetime, timedelta
 import os
 
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
-BASE_URL = "https://newsapi.org/v2/top-headlines"
+BASE_URL = "https://newsapi.org/v2/everything"
 
-def fetch_headlines(country="us", category="politics", page_size=5):
+def fetch_headlines(query="politics", page_size=5):
     params = {
         "apiKey": NEWS_API_KEY,
-        "country": country,
-        "category": category,
+        "q": query,
         "pageSize": page_size,
-        "from": (datetime.now() - timedelta(hours=2)).isoformat()
+        "sortBy": "publishedAt",
+        "from": (datetime.now() - timedelta(hours=2)).isoformat(),
+        "language": "en",
     }
     resp = requests.get(BASE_URL, params=params)
     resp.raise_for_status()
