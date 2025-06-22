@@ -6,9 +6,9 @@ RANDOM_JITTER_SECONDS = 10 * 60  # up to 10 minutes
 
 def schedule_jobs():
     api = authenticate_twitter()
-    sched = BlockingScheduler(timezone="America/New_York")
+    sched = BlockingScheduler(timezone="UTC")
 
-    # Post at 08:00, 12:00 and 18:00 EST each day
+    # Post at 08:00, 12:00 and 18:00 UTC each day
     for hour in (8, 12, 18):
         sched.add_job(
             post_latest_tweets,

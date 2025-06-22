@@ -2,7 +2,7 @@ import os
 import random
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import tweepy
 from dotenv import load_dotenv
@@ -49,10 +49,14 @@ def load_posted_cache():
     except FileNotFoundError:
         data = []
 
-    cutoff = datetime.utcnow() - timedelta(hours=24)
-    filtered = [
-        d for d in data if datetime.fromisoformat(d["timestamp"]) > cutoff
-    ]
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    filtered = []
+    for d in data:
+        ts = datetime.fromisoformat(d["timestamp"])
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        if ts > cutoff:
+            filtered.append(d)
     return filtered
 
 
@@ -101,7 +105,7 @@ def post_latest_tweets(api, count=1):
                 api.create_tweet(text=follow_up, in_reply_to_tweet_id=tweet_id)
                 logger.info("Posted thread follow-up")
 
-            cache.append({"headline": headline, "timestamp": datetime.utcnow().isoformat()})
+            cache.append({"headline": headline, "timestamp": datetime.now(timezone.utc).isoformat()})
             save_posted_cache(cache)
         except Exception as e:
             logger.error("Error posting: %s", e)
