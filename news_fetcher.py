@@ -33,3 +33,14 @@ def fetch_headlines(country="us", category="politics", page_size=5):
     for art in articles:
         print("-", art["title"], "|", art["summary"])
     return articles
+
+
+def print_article(article):
+    """Print the headline and summary of a chosen article."""
+    if not article:
+        return
+    title = article.get("title") if isinstance(article, dict) else str(article)
+    summary = article.get("summary", "") if isinstance(article, dict) else ""
+    print("Selected article:", title)
+    if summary:
+        print("Summary:", summary)

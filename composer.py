@@ -79,7 +79,3 @@ def craft_tweet(headline: str) -> str:
 
     return tweet[:280]
 
-# Quick smoke-test
-if __name__ == "__main__":
-    sample = craft_tweet("Senate approves a $1.5T spending bill with no border security")
-    print("🔹 Sample tweet:\n", sample)
