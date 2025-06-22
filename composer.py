@@ -1,15 +1,7 @@
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+import os
+from openai import OpenAI
 
-MODEL_ID = "tiiuae/falcon-7b"
-
-# Load once at startup
-tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-model     = AutoModelForCausalLM.from_pretrained(
-               MODEL_ID,
-               torch_dtype=torch.float16,
-               device_map="auto",
-            )
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 SYSTEM_PROMPT = (
     "You are Patriot Lens, a serious and edgy conservative commentator on Twitter. "
@@ -18,19 +10,22 @@ SYSTEM_PROMPT = (
 )
 
 def craft_tweet(headline: str) -> str:
-    # Build the chat-style prompt
-    prompt = f"{SYSTEM_PROMPT}\n\nHeadline: \"{headline}\"\nTweet:"
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-    out = model.generate(
-        **inputs,
-        max_new_tokens=60,
+    """Create an on-brand tweet for the provided news headline using the
+    OpenAI chat completions API."""
+
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": f'Headline: "{headline}"'}
+    ]
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=messages,
+        max_tokens=60,
         temperature=0.7,
-        do_sample=True,
-        top_p=0.9
     )
-    text = tokenizer.decode(out[0], skip_special_tokens=True)
-    # Extract only what comes after "Tweet:"
-    tweet = text.split("Tweet:")[-1].strip()
+
+    tweet = response.choices[0].message.content.strip()
     return tweet[:280]
 
 if __name__ == "__main__":
