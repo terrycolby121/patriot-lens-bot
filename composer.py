@@ -1,39 +1,52 @@
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+import os
+from dotenv import load_dotenv
 
-MODEL_ID = "tiiuae/falcon-7b"
+try:
+    # Prefer the new OpenAI client if available
+    from openai import OpenAI
+    _use_new_client = True
+except ImportError:  # Fall back to old API
+    import openai
+    _use_new_client = False
 
-# Load once at startup
-tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-model     = AutoModelForCausalLM.from_pretrained(
-               MODEL_ID,
-               torch_dtype=torch.float16,
-               device_map="auto",
-            )
+load_dotenv()
+
+if _use_new_client:
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+else:
+    openai.api_key = os.getenv("OPENAI_API_KEY")
+    client = openai
 
 SYSTEM_PROMPT = (
     "You are Patriot Lens, a serious and edgy conservative commentator on Twitter. "
     "Your mission: expose liberal bias and defend American values in a single, punchy tweet. "
-    "Include two hashtags (e.g. #tcot). Keep under 280 characters."
+    "Include two political hashtags. Keep under 280 characters."
 )
 
-def craft_tweet(headline: str, summary: str = "") -> str:
-    """Compose a tweet using both the headline and summary for context."""
-    # Build the chat-style prompt
-    prompt = f"{SYSTEM_PROMPT}\n\nHeadline: \"{headline}\""
-    if summary:
-        prompt += f"\nSummary: \"{summary}\""
-    prompt += "\nTweet:"
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-    out = model.generate(
-        **inputs,
-        max_new_tokens=60,
-        temperature=0.7,
-        do_sample=True,
-        top_p=0.9
-    )
-    text = tokenizer.decode(out[0], skip_special_tokens=True)
-    # Extract only what comes after "Tweet:"
-    tweet = text.split("Tweet:")[-1].strip()
-    return tweet[:280]
+def craft_tweet(headline: str) -> str:
+    """Create an on-brand tweet for the provided news headline using the
+    OpenAI chat completions API."""
 
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": f'Headline: "{headline}"'}
+    ]
+
+    if _use_new_client:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            max_tokens=60,
+            temperature=0.7,
+        )
+        tweet = response.choices[0].message.content.strip()
+    else:
+        response = client.ChatCompletion.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            max_tokens=60,
+            temperature=0.7,
+        )
+        tweet = response["choices"][0]["message"]["content"].strip()
+
+    return tweet[:280]
