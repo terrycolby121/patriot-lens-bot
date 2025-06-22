@@ -1,4 +1,5 @@
 import os
+import random
 from dotenv import load_dotenv
 
 try:
@@ -21,8 +22,8 @@ else:
 SYSTEM_PROMPT = (
     "You are Patriot Lens, a serious, unapologetically edgy conservative commentator on Twitter. "
     "Mission: expose liberal bias and defend American values in one punchy tweet. "
-    "Style: confident, declarative language. Include exactly two rallying hashtags. "
-    "Never exceed 280 characters."
+    "Style: confident, declarative language. Respond with a single short statement and no hashtags. "
+    "Keep the statement under 240 characters so additional hashtags can be appended later."
 )
 
 # Two few-shot examples to teach the format
@@ -34,8 +35,8 @@ EXAMPLES = [
     {
         "role": "assistant",
         "content": (
-            "They censor our flag today, they’ll censor our speech tomorrow. "
-            "Stand up for true patriotism! #AmericaFirst"
+            "They censor our flag today, they'll censor our speech tomorrow. "
+            "Stand up for true patriotism!"
         )
     },
     {
@@ -46,14 +47,13 @@ EXAMPLES = [
         "role": "assistant",
         "content": (
             "They promise fairness while squeezing hardworking Americans. "
-            "Who really wins here? #tcot"
+            "Who really wins here?"
         )
     }
 ]
 
-def craft_tweet(headline: str) -> str:
-    """Create an on-brand tweet for the provided news headline using gpt-4o-mini."""
-    # build out the full message array
+def craft_tweet(headline: str, topical_tag: str) -> str:
+    """Create an on-brand tweet for the provided news headline."""
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         *EXAMPLES,
@@ -77,5 +77,16 @@ def craft_tweet(headline: str) -> str:
         )
         tweet = resp["choices"][0]["message"]["content"].strip()
 
+    high_tags = ["#tcot", "#AmericaFirst", "#RedWave2026"]
+    hashtags = " ".join(random.sample(high_tags, 2))
+    tweet = f"{tweet} {hashtags} {topical_tag}".strip()
+
     return tweet[:280]
 
+# Quick smoke-test
+if __name__ == "__main__":
+    sample = craft_tweet(
+        "Senate approves a $1.5T spending bill with no border security",
+        "#Inflation"
+    )
+    print("🔹 Sample tweet:\n", sample)

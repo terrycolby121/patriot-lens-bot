@@ -1,5 +1,9 @@
 import os
 import random
+import json
+import logging
+from datetime import datetime, timedelta
+
 import tweepy
 from dotenv import load_dotenv
 from news_fetcher import fetch_headlines, print_article
@@ -7,12 +11,25 @@ from composer import craft_tweet
 
 load_dotenv()
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler("bot.log"),
+        logging.StreamHandler()
+    ],
+)
+logger = logging.getLogger(__name__)
+
 # Grab credentials from environment variables so they can be provided in
 # the .env file during local development.
 TWITTER_API_KEY = os.getenv("TWITTER_API_KEY")
 TWITTER_API_SECRET = os.getenv("TWITTER_API_SECRET")
 TWITTER_ACCESS_TOKEN = os.getenv("TWITTER_ACCESS_TOKEN")
 TWITTER_ACCESS_TOKEN_SECRET = os.getenv("TWITTER_ACCESS_TOKEN_SECRET")
+
+POSTED_CACHE = "posted.json"
+TOPICAL_TAGS = ["#Inflation", "#BorderCrisis", "#Election2024", "#Debt", "#Energy"]
 
 def authenticate_twitter():
     """Create a Tweepy Client using OAuth1 user context."""
@@ -24,30 +41,70 @@ def authenticate_twitter():
         wait_on_rate_limit=True,
     )
 
+
+def load_posted_cache():
+    try:
+        with open(POSTED_CACHE, "r") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        data = []
+
+    cutoff = datetime.utcnow() - timedelta(hours=24)
+    filtered = [
+        d for d in data if datetime.fromisoformat(d["timestamp"]) > cutoff
+    ]
+    return filtered
+
+
+def save_posted_cache(data):
+    with open(POSTED_CACHE, "w") as f:
+        json.dump(data[-50:], f)
+
 def post_latest_tweets(api, count=1):
     """Fetch headlines and post ``count`` tweets chosen at random."""
     headlines = fetch_headlines()
 
     if not headlines:
-        print("No headlines returned")
+        logger.info("No headlines returned")
         return
 
-    for _ in range(count):
-        choice = random.choice(headlines)
+    cache = load_posted_cache()
+    available = [h for h in headlines if not any(
+        d["headline"] == h.get("title") for d in cache
+    )]
 
-        # Print the chosen article's information via news_fetcher helper
+    if not available:
+        logger.info("No new headlines available after filtering cache")
+        return
+
+    for _ in range(min(count, len(available))):
+        choice = random.choice(available)
+        available.remove(choice)
+
         print_article(choice)
 
-        # Each item from fetch_headlines is a dict with a title key
         headline = choice.get("title") if isinstance(choice, dict) else choice
 
-        tweet = craft_tweet(headline)
-        print("Tweet:", tweet)
+        topical_tag = random.choice(TOPICAL_TAGS)
+        tweet = craft_tweet(headline, topical_tag)
+        logger.info("Tweet: %s", tweet)
         try:
-            api.create_tweet(text=tweet)
-            print("Posted successfully")
+            resp = api.create_tweet(text=tweet)
+            tweet_id = resp.data.get("id") if hasattr(resp, "data") else None
+            if tweet_id:
+                logger.info("Posted tweet ID: %s", tweet_id)
+            else:
+                logger.info("Posted successfully")
+
+            if random.random() < 0.2:
+                follow_up = craft_tweet(headline, topical_tag)
+                api.create_tweet(text=follow_up, in_reply_to_tweet_id=tweet_id)
+                logger.info("Posted thread follow-up")
+
+            cache.append({"headline": headline, "timestamp": datetime.utcnow().isoformat()})
+            save_posted_cache(cache)
         except Exception as e:
-            print("Error posting:", e)
+            logger.error("Error posting: %s", e)
 
 if __name__ == "__main__":
     api = authenticate_twitter()
