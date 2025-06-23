@@ -77,7 +77,7 @@ def craft_tweet(headline: str, topical_tag: str) -> str:
         )
         tweet = resp["choices"][0]["message"]["content"].strip()
 
-    high_tags = ["#tcot", "#AmericaFirst", "#RedWave2026"]
+    high_tags = ["#tcot", "#AmericaFirst", "#RedWave2026", "#SaveAmerica"]
     primary_tag = random.choice(high_tags)
     hashtags = " ".join([primary_tag, topical_tag])
     tweet = f"{tweet} {hashtags}".strip()
