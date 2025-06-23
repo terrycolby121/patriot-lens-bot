@@ -120,7 +120,7 @@ if __name__ == "__main__":
     try:
         original_text = get_tweet_text(url)
         generated_quote = generate_quote(original_text, brand_voice="Patriot Lens")
-        tweet_url = post_quote_with_image(generated_quote, "breaking_news.png")
+        tweet_url = post_quote_with_image(generated_quote, "breaking_news.jpg")
         print(f"Quote tweet posted: {tweet_url}")
     except Exception as exc:
         logger.error("Failed to post quote tweet: %s", exc)
