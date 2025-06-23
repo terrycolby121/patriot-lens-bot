@@ -47,7 +47,6 @@ TWITTER_ACCESS_TOKEN = os.getenv("TWITTER_ACCESS_TOKEN")
 TWITTER_ACCESS_TOKEN_SECRET = os.getenv("TWITTER_ACCESS_TOKEN_SECRET")
 
 POSTED_CACHE = "posted.json"
-TOPICAL_TAGS = ["#Inflation", "#BorderCrisis", "#Election2024", "#Debt", "#Energy"]
 
 def authenticate_twitter():
     """Create a Tweepy Client using OAuth1 user context."""
@@ -58,6 +57,9 @@ def authenticate_twitter():
         access_token_secret=TWITTER_ACCESS_TOKEN_SECRET,
         wait_on_rate_limit=True,
     )
+def save_posted_cache(data):
+    with open(POSTED_CACHE, "w") as f:
+        json.dump(data, f, indent=2)
 
 
 def load_posted_cache():
@@ -73,14 +75,6 @@ def load_posted_cache():
         ts = datetime.fromisoformat(d["timestamp"])
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=UTC)
-        if ts > cutoff:
-            filtered.append(d)
-    return filtered
-
-
-def save_posted_cache(data):
-    with open(POSTED_CACHE, "w") as f:
-        json.dump(data[-50:], f)
 
 def post_latest_tweets(api, count=1):
     """Fetch headlines and post ``count`` tweets chosen at random."""
@@ -106,9 +100,9 @@ def post_latest_tweets(api, count=1):
         print_article(choice)
 
         headline = choice.get("title") if isinstance(choice, dict) else choice
+        summary = choice.get("summary", "") if isinstance(choice, dict) else ""
 
-        topical_tag = random.choice(TOPICAL_TAGS)
-        tweet = craft_tweet(headline, topical_tag)
+        tweet = craft_tweet(headline, summary)
         logger.info("Tweet: %s", tweet)
         try:
             resp = api.create_tweet(text=tweet)
@@ -119,7 +113,7 @@ def post_latest_tweets(api, count=1):
                 logger.info("Posted successfully")
 
             if random.random() < 0.2:
-                follow_up = craft_tweet(headline, topical_tag)
+                follow_up = craft_tweet(headline, summary)
                 api.create_tweet(text=follow_up, in_reply_to_tweet_id=tweet_id)
                 logger.info("Posted thread follow-up")
 
