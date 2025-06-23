@@ -87,6 +87,7 @@ TOPICAL_KEYWORDS = {
     "biden": "#BidenFails",
     "trump": "#MAGA",
     "gas": "#PainAtThePump",
+    "iran": "#NoDealWithIran",
 }
 
 
