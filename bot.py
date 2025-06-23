@@ -57,9 +57,6 @@ def authenticate_twitter():
         access_token_secret=TWITTER_ACCESS_TOKEN_SECRET,
         wait_on_rate_limit=True,
     )
-def save_posted_cache(data):
-    with open(POSTED_CACHE, "w") as f:
-        json.dump(data, f, indent=2)
 
 
 def load_posted_cache():
@@ -75,6 +72,14 @@ def load_posted_cache():
         ts = datetime.fromisoformat(d["timestamp"])
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=UTC)
+        if ts > cutoff:
+            filtered.append(d)
+    return filtered
+
+
+def save_posted_cache(data):
+    with open(POSTED_CACHE, "w") as f:
+        json.dump(data[-50:], f)
 
 def post_latest_tweets(api, count=1):
     """Fetch headlines and post ``count`` tweets chosen at random."""

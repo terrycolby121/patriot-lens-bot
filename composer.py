@@ -1,3 +1,33 @@
+import os
+import random
+from dotenv import load_dotenv
+
+try:
+    # Prefer the new OpenAI client if available
+    from openai import OpenAI
+    _use_new_client = True
+except ImportError:  # Fall back to old API
+    import openai
+    _use_new_client = False
+
+load_dotenv()
+
+if _use_new_client:
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+else:
+    openai.api_key = os.getenv("OPENAI_API_KEY")
+    client = openai
+
+# A concise system prompt defining the persona & constraints
+SYSTEM_PROMPT = (
+    "You are Patriot Lens, a serious, unapologetically edgy conservative commentator on Twitter. "
+    "Mission: expose liberal bias and defend American values in one punchy tweet. "
+    "Style: confident, declarative language. Respond with a single short statement and no hashtags. "
+    "Begin with a brief 3-6 word phrase summarizing the article's topic (not a direct quote) followed by a colon. "
+    "Keep the entire response under 240 characters so additional hashtags can be appended later."
+)
+
+# Two few-shot examples to teach the format
 EXAMPLES = [
     {
         "role": "user",
@@ -117,6 +147,6 @@ def craft_tweet(headline: str, summary: str = "") -> str:
 if __name__ == "__main__":
     sample = craft_tweet(
         "Senate approves a $1.5T spending bill with no border security",
-        "Massive government spending continues with zero commitment to border protections."
+        "Massive government spending continues with zero commitment to border protections.",
     )
     print("🔹 Sample tweet:\n", sample)
