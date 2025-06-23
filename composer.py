@@ -148,6 +148,6 @@ def craft_tweet(headline: str, summary: str = "") -> str:
 if __name__ == "__main__":
     sample = craft_tweet(
         "Senate approves a $1.5T spending bill with no border security",
-        "Massive government spending continues with zero commitment to border protections.",
+        "Massive government spending continues with zero commitment to border protections."
     )
     print("🔹 Sample tweet:\n", sample)
