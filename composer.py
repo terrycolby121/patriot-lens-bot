@@ -53,19 +53,66 @@ EXAMPLES = [
     }
 ]
 
-def craft_tweet(headline: str, topical_tag: str) -> str:
-    """Create an on-brand tweet for the provided news headline."""
+# Map keywords in a headline to topical hashtags
+TOPICAL_KEYWORDS = {
+    "border": "#BorderCrisis",
+    "immigration": "#SecureTheBorder",
+    "spending": "#Inflation",
+    "debt": "#Bidenomics",
+    "tax": "#TaxTheft",
+    "crime": "#LawAndOrder",
+    "police": "#BackTheBlue",
+    "education": "#WokeSchools",
+    "trans": "#ProtectOurKids",
+    "gender": "#BiologyMatters",
+    "climate": "#ClimateScam",
+    "energy": "#DrillBabyDrill",
+    "fossil": "#EnergyIndependence",
+    "gun": "#2A",
+    "second amendment": "#2A",
+    "censorship": "#FreeSpeech",
+    "social media": "#BigTechBias",
+    "election": "#ElectionIntegrity",
+    "voting": "#SecureElections",
+    "china": "#ChinaThreat",
+    "ukraine": "#AmericaFirst",
+    "israel": "#StandWithIsrael",
+    "patriot": "#AmericaFirst",
+    "military": "#SupportOurTroops",
+    "student loan": "#BailoutBlues",
+    "covid": "#Plandemic",
+    "mask": "#MedicalFreedom",
+    "vaccine": "#MyBodyMyChoice",
+    "mandate": "#NoMandates",
+    "biden": "#BidenFails",
+    "trump": "#MAGA",
+    "gas": "#PainAtThePump",
+}
+
+
+def infer_tag(headline: str) -> str:
+    """Return an appropriate topical hashtag for the headline."""
+    text = (headline or "").lower()
+    for keyword, tag in TOPICAL_KEYWORDS.items():
+        if keyword in text:
+            return tag
+    return "#News"
+
+def craft_tweet(headline: str, summary: str = "") -> str:
+    """Create an on-brand tweet for the provided article."""
+    topical_tag = infer_tag(headline)
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         *EXAMPLES,
         {
             "role": "user",
             "content": (
-                f'Input: "{headline}"\n'
+                f'Headline: "{headline}"\n'
+                f'Summary: "{summary}"\n'
                 "Guideline: start with a 3-6 word topic summary, not a quote,"
                 " then your comment. Output:"
             ),
-        }
+        },
     ]
 
     if _use_new_client:
@@ -100,6 +147,6 @@ def craft_tweet(headline: str, topical_tag: str) -> str:
 if __name__ == "__main__":
     sample = craft_tweet(
         "Senate approves a $1.5T spending bill with no border security",
-        "#Inflation"
+        "Massive government spending continues with zero commitment to border protections."
     )
     print("🔹 Sample tweet:\n", sample)
