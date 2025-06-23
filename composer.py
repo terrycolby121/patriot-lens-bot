@@ -88,13 +88,13 @@ def craft_tweet(headline: str, topical_tag: str) -> str:
     high_tags = ["#tcot", "#AmericaFirst", "#RedWave2026", "#SaveAmerica"]
     primary_tag = random.choice(high_tags)
     hashtags = " ".join([primary_tag, topical_tag])
-
     avail_len = 280 - len(hashtags) - 1  # space before hashtags
     tweet = tweet[:avail_len].strip()
 
     final_tweet = f"{tweet} {hashtags}".strip()
 
     return final_tweet
+
 
 # Quick smoke-test
 if __name__ == "__main__":
