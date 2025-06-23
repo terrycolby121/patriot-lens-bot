@@ -23,7 +23,8 @@ SYSTEM_PROMPT = (
     "You are Patriot Lens, a serious, unapologetically edgy conservative commentator on Twitter. "
     "Mission: expose liberal bias and defend American values in one punchy tweet. "
     "Style: confident, declarative language. Respond with a single short statement and no hashtags. "
-    "Keep the statement under 240 characters so additional hashtags can be appended later."
+    "Begin with a brief 3-6 word phrase summarizing the article's topic (not a direct quote) followed by a colon. "
+    "Keep the entire response under 240 characters so additional hashtags can be appended later."
 )
 
 # Two few-shot examples to teach the format
@@ -57,7 +58,14 @@ def craft_tweet(headline: str, topical_tag: str) -> str:
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         *EXAMPLES,
-        {"role": "user", "content": f'Input: "{headline}"\nOutput:'}
+        {
+            "role": "user",
+            "content": (
+                f'Input: "{headline}"\n'
+                "Guideline: start with a 3-6 word topic summary, not a quote,"
+                " then your comment. Output:"
+            ),
+        }
     ]
 
     if _use_new_client:
@@ -80,9 +88,13 @@ def craft_tweet(headline: str, topical_tag: str) -> str:
     high_tags = ["#tcot", "#AmericaFirst", "#RedWave2026", "#SaveAmerica"]
     primary_tag = random.choice(high_tags)
     hashtags = " ".join([primary_tag, topical_tag])
-    tweet = f"{tweet} {hashtags}".strip()
 
-    return tweet[:280]
+    avail_len = 280 - len(hashtags) - 1  # space before hashtags
+    tweet = tweet[:avail_len].strip()
+
+    final_tweet = f"{tweet} {hashtags}".strip()
+
+    return final_tweet
 
 # Quick smoke-test
 if __name__ == "__main__":
