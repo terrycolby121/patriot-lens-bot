@@ -4,6 +4,7 @@ import logging
 import requests
 
 import tweepy
+from tweepy import OAuth1UserHandler
 
 try:
     from openai import OpenAI
@@ -21,6 +22,7 @@ TWITTER_API_KEY = os.getenv("TWITTER_API_KEY")
 TWITTER_API_SECRET = os.getenv("TWITTER_API_SECRET")
 TWITTER_ACCESS_TOKEN = os.getenv("TWITTER_ACCESS_TOKEN")
 TWITTER_ACCESS_TOKEN_SECRET = os.getenv("TWITTER_ACCESS_TOKEN_SECRET")
+TWITTER_BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 if _use_new_client:
@@ -33,6 +35,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 
+
 def authenticate_twitter() -> tweepy.Client:
     """Authenticate with Twitter and return a Tweepy Client."""
     return tweepy.Client(
@@ -40,6 +43,7 @@ def authenticate_twitter() -> tweepy.Client:
         consumer_secret=TWITTER_API_SECRET,
         access_token=TWITTER_ACCESS_TOKEN,
         access_token_secret=TWITTER_ACCESS_TOKEN_SECRET,
+        bearer_token=TWITTER_BEARER_TOKEN,
         wait_on_rate_limit=True,
     )
 
@@ -93,23 +97,34 @@ def generate_quote(text: str, brand_voice: str) -> str:
         raise
 
 
+def get_v1_api() -> tweepy.API:
+    auth = OAuth1UserHandler(
+        TWITTER_API_KEY,
+        TWITTER_API_SECRET,
+        TWITTER_ACCESS_TOKEN,
+        TWITTER_ACCESS_TOKEN_SECRET,
+    )
+    return tweepy.API(auth, wait_on_rate_limit=True)
+
 def post_quote_with_image(quote: str, image_path: str) -> str:
     """Post ``quote`` with the image at ``image_path``. Returns the tweet URL."""
-    api = authenticate_twitter()
-
+    # use v1.1 API for media upload
+    api_v1 = get_v1_api()
     try:
-        media = api.media_upload(filename=image_path)
+        media = api_v1.media_upload(filename=image_path)
     except Exception as exc:
-        logger.error("Error uploading media: %s", exc)
+        logger.error("Error uploading media (v1): %s", exc)
         raise
 
+    # use v2 Client for posting the tweet
+    client_v2 = authenticate_twitter()
     try:
-        resp = api.create_tweet(text=quote, media_ids=[media.media_id])
+        resp = client_v2.create_tweet(text=quote, media_ids=[media.media_id])
     except Exception as exc:
-        logger.error("Error posting tweet: %s", exc)
+        logger.error("Error posting tweet (v2): %s", exc)
         raise
 
-    tweet_id = resp.data.get("id") if hasattr(resp, "data") else None
+    tweet_id = resp.data.get("id")
     if not tweet_id:
         raise RuntimeError("Failed to retrieve new tweet ID")
     return f"https://twitter.com/user/status/{tweet_id}"
