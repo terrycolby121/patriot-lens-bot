@@ -1,7 +1,6 @@
 import os
 import re
 import logging
-import requests
 
 import tweepy
 from tweepy import OAuth1UserHandler
@@ -48,31 +47,20 @@ def authenticate_twitter() -> tweepy.Client:
     )
 
 
-def get_tweet_text(url: str) -> str:
-    """Fetch the text of the tweet identified by ``url``."""
-    logger.info("Fetching tweet text from %s", url)
+def extract_tweet_id(url: str) -> str:
+    """Return the tweet ID parsed from ``url``."""
+    logger.info("Parsing tweet ID from %s", url)
     match = re.search(r"/status/(\d+)", url)
     if not match:
         raise ValueError("Invalid Tweet URL")
-    tweet_id = match.group(1)
-
-    api = authenticate_twitter()
-    try:
-        resp = api.get_tweet(tweet_id, tweet_fields=["text"])
-    except Exception as exc:
-        logger.error("Error fetching tweet: %s", exc)
-        raise
-
-    if not hasattr(resp, "data") or not resp.data:
-        raise ValueError("Tweet not found")
-    return resp.data.get("text", "")
+    return match.group(1)
 
 
-def generate_quote(text: str, brand_voice: str) -> str:
-    """Generate a concise quote tweet responding to ``text``."""
+def generate_quote(brand_voice: str) -> str:
+    """Generate a concise, on-brand quote tweet."""
     system_prompt = (
         f"You are the social media voice of {brand_voice}: quick, factual, bold. "
-        f"Quote-tweet this breaking update: {text}"
+        "Craft a short reaction to quote-tweet a breaking update without repeating the original text."
     )
     messages = [{"role": "system", "content": system_prompt}]
 
@@ -106,8 +94,10 @@ def get_v1_api() -> tweepy.API:
     )
     return tweepy.API(auth, wait_on_rate_limit=True)
 
-def post_quote_with_image(quote: str, image_path: str) -> str:
-    """Post ``quote`` with the image at ``image_path``. Returns the tweet URL."""
+def post_quote_with_image(
+    quote: str, image_path: str, original_tweet_id: str
+) -> str:
+    """Post ``quote`` with ``image_path`` quoting ``original_tweet_id``."""
     # use v1.1 API for media upload
     api_v1 = get_v1_api()
     try:
@@ -119,7 +109,11 @@ def post_quote_with_image(quote: str, image_path: str) -> str:
     # use v2 Client for posting the tweet
     client_v2 = authenticate_twitter()
     try:
-        resp = client_v2.create_tweet(text=quote, media_ids=[media.media_id])
+        resp = client_v2.create_tweet(
+            text=quote,
+            media_ids=[media.media_id],
+            quote_tweet_id=original_tweet_id,
+        )
     except Exception as exc:
         logger.error("Error posting tweet (v2): %s", exc)
         raise
@@ -133,9 +127,11 @@ def post_quote_with_image(quote: str, image_path: str) -> str:
 if __name__ == "__main__":
     url = input("Please paste the URL of the Tweet to quote-tweet: ")
     try:
-        original_text = get_tweet_text(url)
-        generated_quote = generate_quote(original_text, brand_voice="Patriot Lens")
-        tweet_url = post_quote_with_image(generated_quote, "breaking_news.jpg")
+        tweet_id = extract_tweet_id(url)
+        generated_quote = generate_quote(brand_voice="Patriot Lens")
+        tweet_url = post_quote_with_image(
+            generated_quote, "breaking_news.jpg", tweet_id
+        )
         print(f"Quote tweet posted: {tweet_url}")
     except Exception as exc:
         logger.error("Failed to post quote tweet: %s", exc)
