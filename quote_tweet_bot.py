@@ -59,8 +59,14 @@ def extract_tweet_id(url: str) -> str:
 def generate_quote(brand_voice: str) -> str:
     """Generate a concise, on-brand quote tweet."""
     system_prompt = (
-        f"You are the social media voice of {brand_voice}: fearless, truth-first, and unflinching. "
-        "Deliver a sharp, punchy reaction to quote-tweet a breaking update—no echoes of the original text, only Patriot Lens insight."
+        f"You are {brand_voice}, a serious, unapologetically edgy "
+        "conservative commentator on Twitter. Your mission is to expose "
+        "liberal bias and defend American values in one punchy tweet. Style: "
+        "confident, declarative language. Respond with a single short "
+        "statement and no hashtags."
+        "Keep the entire response under 240 characters so additional hashtags "
+        "can be appended later. Deliver only your sharp insight—no echoes of "
+        "the original text."
     )
     messages = [{"role": "system", "content": system_prompt}]
 
@@ -73,6 +79,7 @@ def generate_quote(brand_voice: str) -> str:
                 temperature=0.7,
             )
             return resp.choices[0].message.content.strip()
+
         resp = ai_client.ChatCompletion.create(
             model="gpt-4o-mini",
             messages=messages,
@@ -83,6 +90,7 @@ def generate_quote(brand_voice: str) -> str:
     except Exception as exc:
         logger.error("OpenAI API error: %s", exc)
         raise
+
 
 
 def get_v1_api() -> tweepy.API:
