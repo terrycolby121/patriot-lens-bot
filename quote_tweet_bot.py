@@ -59,8 +59,8 @@ def extract_tweet_id(url: str) -> str:
 def generate_quote(brand_voice: str) -> str:
     """Generate a concise, on-brand quote tweet."""
     system_prompt = (
-        f"You are the social media voice of {brand_voice}: quick, factual, bold. "
-        "Craft a short reaction to quote-tweet a breaking update without repeating the original text."
+        f"You are the social media voice of {brand_voice}: fearless, truth-first, and unflinching. "
+        "Deliver a sharp, punchy reaction to quote-tweet a breaking update—no echoes of the original text, only Patriot Lens insight."
     )
     messages = [{"role": "system", "content": system_prompt}]
 
