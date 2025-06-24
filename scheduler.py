@@ -20,8 +20,8 @@ def schedule_jobs():
 
     sched.add_listener(log_next_runs, EVENT_SCHEDULER_STARTED)
 
-    # Post at 08:00, 12:00 and 18:00 Eastern time each day
-    for hour in (8, 12, 18):
+    # Post at 08:00, 12:00,  18:00, 20:00, 22:00 Eastern time each day
+    for hour in (8, 12, 18, 20, 22):
         sched.add_job(
             post_latest_tweets,
             trigger="cron",
