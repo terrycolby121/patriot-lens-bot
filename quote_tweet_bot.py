@@ -1,9 +1,11 @@
 import os
 import re
 import logging
+import random
 
 import tweepy
 from tweepy import OAuth1UserHandler
+from composer import infer_tag
 
 try:
     from openai import OpenAI
@@ -33,6 +35,9 @@ else:
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
+# Common high-engagement hashtags for conservative audiences
+HIGH_VALUE_TAGS = ["#tcot", "#AmericaFirst", "#RedWave2026", "#SaveAmerica"]
+
 
 
 def authenticate_twitter() -> tweepy.Client:
@@ -54,6 +59,28 @@ def extract_tweet_id(url: str) -> str:
     if not match:
         raise ValueError("Invalid Tweet URL")
     return match.group(1)
+
+
+def fetch_tweet_text(tweet_id: str) -> str:
+    """Return the text of the tweet with ``tweet_id``."""
+    client = authenticate_twitter()
+    try:
+        resp = client.get_tweet(tweet_id, tweet_fields=["text"])
+        if resp and resp.data:
+            return resp.data.get("text", "") or ""
+    except Exception as exc:
+        logger.error("Error fetching original tweet text: %s", exc)
+    return ""
+
+
+def append_hashtags(quote: str, context: str) -> str:
+    """Attach high-value and topical hashtags to ``quote``."""
+    topical_tag = infer_tag(context)
+    primary_tag = random.choice(HIGH_VALUE_TAGS)
+    hashtags = f"{primary_tag} {topical_tag}"
+    avail_len = 280 - len(hashtags) - 1  # space before hashtags
+    quote = quote[:avail_len].strip()
+    return f"{quote} {hashtags}".strip()
 
 
 def generate_quote(brand_voice: str) -> str:
@@ -136,9 +163,11 @@ if __name__ == "__main__":
     url = input("Please paste the URL of the Tweet to quote-tweet: ")
     try:
         tweet_id = extract_tweet_id(url)
+        original_text = fetch_tweet_text(tweet_id)
         generated_quote = generate_quote(brand_voice="Patriot Lens")
+        final_quote = append_hashtags(generated_quote, original_text)
         tweet_url = post_quote_with_image(
-            generated_quote, "breaking_news.jpg", tweet_id
+            final_quote, "breaking_news.jpg", tweet_id
         )
         print(f"Quote tweet posted: {tweet_url}")
     except Exception as exc:
