@@ -167,7 +167,7 @@ if __name__ == "__main__":
         generated_quote = generate_quote(brand_voice="Patriot Lens")
         final_quote = append_hashtags(generated_quote, original_text)
         tweet_url = post_quote_with_image(
-            final_quote, "breaking_news.jpg", tweet_id
+            final_quote, "OBBBA.jpg", tweet_id
         )
         print(f"Quote tweet posted: {tweet_url}")
     except Exception as exc:
