@@ -1,15 +1,12 @@
 import os
 import re
 import logging
+import random
 
-try:
-    import tweepy
-    from tweepy import OAuth1UserHandler
-except ImportError as exc:  # pragma: no cover - helpful runtime check
-    raise RuntimeError(
-        "tweepy package is required. Install dependencies from requirements.txt"
-    ) from exc
-from composer import infer_tags
+import tweepy
+from tweepy import OAuth1UserHandler
+from composer import infer_tag
+
 
 try:
     from openai import OpenAI
@@ -43,6 +40,9 @@ else:
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
+
+# Common high-engagement hashtags for conservative audiences
+HIGH_VALUE_TAGS = ["#tcot", "#AmericaFirst", "#RedWave2026", "#SaveAmerica"]
 
 
 # Major news accounts to monitor for high-engagement tweets. Each of these
@@ -93,9 +93,10 @@ def fetch_tweet_text(tweet_id: str) -> str:
 
 
 def append_hashtags(quote: str, context: str) -> str:
-    """Attach two relevant high-value hashtags to ``quote``."""
-    tags = infer_tags(context)
-    hashtags = " ".join(tags)
+    """Attach high-value and topical hashtags to ``quote``."""
+    topical_tag = infer_tag(context)
+    primary_tag = random.choice(HIGH_VALUE_TAGS)
+    hashtags = f"{primary_tag} {topical_tag}"
     avail_len = 280 - len(hashtags) - 1  # space before hashtags
     quote = quote[:avail_len].strip()
     return f"{quote} {hashtags}".strip()
@@ -139,7 +140,6 @@ def find_high_engagement_tweet() -> tuple[str, str]:
     if not best_tweet:
         raise RuntimeError("No suitable tweet found")
     return str(best_tweet.id), best_tweet.text
-
 
 def generate_quote(brand_voice: str) -> str:
     """Generate a concise, on-brand quote tweet."""
@@ -233,7 +233,8 @@ if __name__ == "__main__":
         generated_quote = generate_quote(brand_voice="Patriot Lens")
         final_quote = append_hashtags(generated_quote, original_text)
         tweet_url = post_quote_with_image(
-            final_quote, "breaking_news.jpg", tweet_id
+        final_quote, "breaking_news.jpg", tweet_id
+
         )
         print(f"Quote tweet posted: {tweet_url}")
     except Exception as exc:
