@@ -3,16 +3,26 @@ import re
 import logging
 import random
 
-import tweepy
-from tweepy import OAuth1UserHandler
+try:
+    import tweepy
+    from tweepy import OAuth1UserHandler
+except ImportError as exc:  # pragma: no cover - helpful runtime check
+    raise RuntimeError(
+        "tweepy package is required. Install dependencies from requirements.txt"
+    ) from exc
 from composer import infer_tag
 
 try:
     from openai import OpenAI
     _use_new_client = True
 except ImportError:
-    import openai
-    _use_new_client = False
+    try:
+        import openai
+        _use_new_client = False
+    except ImportError as exc:  # pragma: no cover - helpful runtime check
+        raise RuntimeError(
+            "openai package is required. Install dependencies from requirements.txt"
+        ) from exc
 
 from dotenv import load_dotenv
 
