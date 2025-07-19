@@ -26,6 +26,7 @@ import tweepy
 from dotenv import load_dotenv
 from news_fetcher import fetch_headlines, print_article
 from composer import craft_tweet
+from quote_tweet_bot import quote_high_engagement_tweet
 
 load_dotenv()
 
@@ -82,7 +83,17 @@ def save_posted_cache(data):
         json.dump(data[-50:], f)
 
 def post_latest_tweets(api, count=1):
-    """Fetch headlines and post ``count`` tweets chosen at random."""
+    """Post a tweet. With ~60% chance this is a quote tweet."""
+
+    if random.random() < 0.6:
+        logger.info("Attempting quote tweet from news accounts")
+        try:
+            url = quote_high_engagement_tweet()
+            logger.info("Quote tweet posted: %s", url)
+            return
+        except Exception as exc:
+            logger.error("Quote tweet failed: %s", exc)
+
     headlines = fetch_headlines()
 
     if not headlines:
