@@ -1,5 +1,6 @@
 import os
 import random
+from typing import List
 
 try:
     from dotenv import load_dotenv
@@ -128,7 +129,7 @@ def infer_tag(headline: str) -> str:
     return "#News"
 
 
-def infer_tags(headline: str, limit: int = 2) -> list[str]:
+def infer_tags(headline: str, limit: int = 2) -> List[str]:
     """Return up to ``limit`` hashtags related to ``headline``."""
     text = (headline or "").lower()
     tags = [tag for keyword, tag in TOPICAL_KEYWORDS.items() if keyword in text]
