@@ -1,14 +1,25 @@
 import os
 import random
-from dotenv import load_dotenv
+
+try:
+    from dotenv import load_dotenv
+except ImportError as exc:  # pragma: no cover - helpful runtime check
+    raise RuntimeError(
+        "python-dotenv package is required. Install dependencies from requirements.txt"
+    ) from exc
 
 try:
     # Prefer the new OpenAI client if available
     from openai import OpenAI
     _use_new_client = True
-except ImportError:  # Fall back to old API
-    import openai
-    _use_new_client = False
+except ImportError:
+    try:
+        import openai
+        _use_new_client = False
+    except ImportError as exc:  # pragma: no cover - helpful runtime check
+        raise RuntimeError(
+            "openai package is required. Install dependencies from requirements.txt"
+        ) from exc
 
 load_dotenv()
 
@@ -90,6 +101,9 @@ TOPICAL_KEYWORDS = {
     "iran": "#NoDealWithIran",
 }
 
+# Generic high-engagement hashtags that align with the brand
+HIGH_VALUE_TAGS = ["#tcot", "#AmericaFirst", "#RedWave2026", "#SaveAmerica"]
+
 
 def infer_tag(headline: str) -> str:
     """Return an appropriate topical hashtag for the headline."""
@@ -99,9 +113,21 @@ def infer_tag(headline: str) -> str:
             return tag
     return "#News"
 
+
+def infer_tags(headline: str, limit: int = 2) -> list[str]:
+    """Return up to ``limit`` hashtags related to ``headline``."""
+    text = (headline or "").lower()
+    tags = [tag for keyword, tag in TOPICAL_KEYWORDS.items() if keyword in text]
+    # Deduplicate while preserving order
+    tags = list(dict.fromkeys(tags))
+    if len(tags) < limit:
+        remaining = limit - len(tags)
+        tags.extend(random.sample(HIGH_VALUE_TAGS, k=remaining))
+    return tags[:limit]
+
 def craft_tweet(headline: str, summary: str = "") -> str:
     """Create an on-brand tweet for the provided article."""
-    topical_tag = infer_tag(headline)
+    tags = infer_tags(headline)
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         *EXAMPLES,
@@ -133,9 +159,7 @@ def craft_tweet(headline: str, summary: str = "") -> str:
         )
         tweet = resp["choices"][0]["message"]["content"].strip()
 
-    high_tags = ["#tcot", "#AmericaFirst", "#RedWave2026", "#SaveAmerica"]
-    primary_tag = random.choice(high_tags)
-    hashtags = " ".join([primary_tag, topical_tag])
+    hashtags = " ".join(tags)
     avail_len = 280 - len(hashtags) - 1  # space before hashtags
     tweet = tweet[:avail_len].strip()
 

@@ -1,7 +1,6 @@
 import os
 import re
 import logging
-import random
 
 try:
     import tweepy
@@ -10,7 +9,7 @@ except ImportError as exc:  # pragma: no cover - helpful runtime check
     raise RuntimeError(
         "tweepy package is required. Install dependencies from requirements.txt"
     ) from exc
-from composer import infer_tag
+from composer import infer_tags
 
 try:
     from openai import OpenAI
@@ -45,8 +44,6 @@ else:
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-# Common high-engagement hashtags for conservative audiences
-HIGH_VALUE_TAGS = ["#tcot", "#AmericaFirst", "#RedWave2026", "#SaveAmerica"]
 
 # Major news accounts to monitor for high-engagement tweets. Each of these
 # typically has well over one million followers.
@@ -96,10 +93,9 @@ def fetch_tweet_text(tweet_id: str) -> str:
 
 
 def append_hashtags(quote: str, context: str) -> str:
-    """Attach high-value and topical hashtags to ``quote``."""
-    topical_tag = infer_tag(context)
-    primary_tag = random.choice(HIGH_VALUE_TAGS)
-    hashtags = f"{primary_tag} {topical_tag}"
+    """Attach two relevant high-value hashtags to ``quote``."""
+    tags = infer_tags(context)
+    hashtags = " ".join(tags)
     avail_len = 280 - len(hashtags) - 1  # space before hashtags
     quote = quote[:avail_len].strip()
     return f"{quote} {hashtags}".strip()
