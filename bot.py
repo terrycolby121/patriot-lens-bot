@@ -47,6 +47,7 @@ TWITTER_ACCESS_TOKEN = os.getenv("TWITTER_ACCESS_TOKEN")
 TWITTER_ACCESS_TOKEN_SECRET = os.getenv("TWITTER_ACCESS_TOKEN_SECRET")
 
 POSTED_CACHE = "posted.json"
+POST_COUNT_FILE = "tweet_count.txt"
 
 def authenticate_twitter():
     """Create a Tweepy Client using OAuth1 user context."""
@@ -81,6 +82,19 @@ def save_posted_cache(data):
     with open(POSTED_CACHE, "w") as f:
         json.dump(data[-50:], f)
 
+
+def load_post_count() -> int:
+    try:
+        with open(POST_COUNT_FILE, "r") as f:
+            return int(f.read().strip())
+    except FileNotFoundError:
+        return 0
+
+
+def save_post_count(count: int) -> None:
+    with open(POST_COUNT_FILE, "w") as f:
+        f.write(str(count))
+
 def post_latest_tweets(api, count=1):
     """Fetch headlines and post ``count`` tweets chosen at random."""
     headlines = fetch_headlines()
@@ -91,7 +105,7 @@ def post_latest_tweets(api, count=1):
 
     cache = load_posted_cache()
     available = [h for h in headlines if not any(
-        d["headline"] == h.get("title") for d in cache
+        d.get("headline") == h.get("title") for d in cache
     )]
 
     if not available:
@@ -122,11 +136,40 @@ def post_latest_tweets(api, count=1):
                 api.create_tweet(text=follow_up, in_reply_to_tweet_id=tweet_id)
                 logger.info("Posted thread follow-up")
 
-            cache.append({"headline": headline, "timestamp": datetime.now(UTC).isoformat()})
+            cache.append({
+                "type": "headline",
+                "headline": headline,
+                "timestamp": datetime.now(UTC).isoformat(),
+            })
             save_posted_cache(cache)
         except Exception as e:
             logger.error("Error posting: %s", e)
 
+
+def post_scheduled_tweet(api):
+    """Post a headline tweet or every fourth time a quote tweet."""
+    count = load_post_count() + 1
+    try:
+        if count % 4 == 0:
+            logger.info("Posting quote tweet for scheduled job")
+            from quote_tweet_bot import quote_trending_tweet
+
+            try:
+                quote_trending_tweet()
+            except Exception as exc:
+                logger.error("Quote tweet failed: %s", exc)
+            else:
+                cache = load_posted_cache()
+                cache.append({
+                    "type": "quote",
+                    "timestamp": datetime.now(UTC).isoformat(),
+                })
+                save_posted_cache(cache)
+        else:
+            post_latest_tweets(api, 1)
+    finally:
+        save_post_count(count)
+
 if __name__ == "__main__":
     api = authenticate_twitter()
-    post_latest_tweets(api)
+    post_scheduled_tweet(api)
