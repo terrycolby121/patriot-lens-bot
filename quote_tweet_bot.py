@@ -134,7 +134,11 @@ def get_trending_topics(limit: int = 10) -> List[str]:
         trends = api.get_place_trends(TREND_WOEID)
         trend_list = trends[0]["trends"] if trends else []
     except Exception as exc:
-        logger.error("Error fetching trending topics: %s", exc)
+        # Many accounts (including those with only Essential access) cannot
+        # call the trends endpoint.  In that case we simply return an empty
+        # list so the caller can fall back to another strategy instead of
+        # raising an exception here.
+        logger.warning("Trending topics unavailable: %s", exc)
         return []
     names = [t["name"] for t in trend_list[:limit]]
     return names
@@ -184,6 +188,8 @@ def find_controversial_trending_tweet() -> Tuple[str, str]:
     """Return tweet ID and text for an engaging tweet on a trending topic."""
     client = authenticate_twitter()
     topics = get_trending_topics()
+    if not topics:
+        raise RuntimeError("Trending topics unavailable")
     best_tweet = None
     best_score = -1
     for topic in topics:
@@ -285,11 +291,20 @@ def quote_high_engagement_tweet() -> str:
 
 
 def quote_trending_tweet() -> str:
-    """Quote tweet a controversial trending topic."""
-    tweet_id, text = find_controversial_trending_tweet()
-    quote = generate_quote(text, brand_voice="Patriot Lens")
-    final = append_hashtags(quote, text)
-    return post_quote_tweet(final, tweet_id)
+    """Quote tweet a controversial trending topic.
+
+    If trending data is not available (e.g. the account lacks access to the
+    trends endpoint) we gracefully fall back to quoting a high-engagement news
+    tweet instead of raising an error.
+    """
+    try:
+        tweet_id, text = find_controversial_trending_tweet()
+        quote = generate_quote(text, brand_voice="Patriot Lens")
+        final = append_hashtags(quote, text)
+        return post_quote_tweet(final, tweet_id)
+    except Exception as exc:
+        logger.warning("Falling back to high-engagement tweet: %s", exc)
+        return quote_high_engagement_tweet()
 
 
 
