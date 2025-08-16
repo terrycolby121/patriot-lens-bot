@@ -335,32 +335,14 @@ if __name__ == "__main__":
         action="store_true",
         help="Continuously monitor trending topics and quote tweet",
     )
-    parser.add_argument(
-        "--trending",
-        action="store_true",
-        help="Quote tweet a single trending topic and exit",
-    )
     args = parser.parse_args()
 
     if args.monitor:
         monitor_trending_topics()
-    elif args.trending:
+    else:
         try:
             url = quote_trending_tweet()
             print(f"Quote tweet posted: {url}")
-        except Exception as exc:
-            logger.error("Failed to post trending quote tweet: %s", exc)
-    else:
-        url = input("Please paste the URL of the Tweet to quote-tweet: ")
-        try:
-            tweet_id = extract_tweet_id(url)
-            original_text = fetch_tweet_text(tweet_id)
-            generated_quote = generate_quote(
-                original_text, brand_voice="Patriot Lens"
-            )
-            final_quote = append_hashtags(generated_quote, original_text)
-            tweet_url = post_quote_tweet(final_quote, tweet_id)
-            print(f"Quote tweet posted: {tweet_url}")
         except Exception as exc:
             logger.error("Failed to post quote tweet: %s", exc)
 
