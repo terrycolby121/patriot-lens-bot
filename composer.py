@@ -1,5 +1,6 @@
 import os
 import random
+import re
 from typing import List
 
 try:
@@ -140,6 +141,19 @@ def infer_tags(headline: str, limit: int = 2) -> List[str]:
         tags.extend(random.sample(HIGH_VALUE_TAGS, k=remaining))
     return tags[:limit]
 
+def sanitize_tweet(text: str) -> str:
+    """Remove AI disclaimers and disallowed punctuation."""
+    text = text.replace("—", "-")
+    patterns = [
+        r"(?i)as an ai[^.?!]*[.?!]?",
+        r"(?i)i(?: am|'m) an ai[^.?!]*[.?!]?",
+        r"(?i)as a language model[^.?!]*[.?!]?",
+    ]
+    for pat in patterns:
+        text = re.sub(pat, "", text)
+    return text.strip()
+
+
 def craft_tweet(headline: str, summary: str = "") -> str:
     """Create an on-brand tweet for the provided article."""
     tags = infer_tags(headline)
@@ -173,6 +187,8 @@ def craft_tweet(headline: str, summary: str = "") -> str:
             temperature=0.7,
         )
         tweet = resp["choices"][0]["message"]["content"].strip()
+
+    tweet = sanitize_tweet(tweet)
 
     hashtags = " ".join(tags)
     avail_len = 280 - len(hashtags) - 1  # space before hashtags
