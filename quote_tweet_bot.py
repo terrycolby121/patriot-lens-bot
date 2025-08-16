@@ -3,6 +3,7 @@ import re
 import logging
 import random
 import time
+from typing import List, Tuple
 
 import tweepy
 from tweepy import OAuth1UserHandler
@@ -126,7 +127,7 @@ def append_hashtags(quote: str, context: str) -> str:
     return f"{quote} {hashtags}".strip()
 
 
-def get_trending_topics(limit: int = 10) -> list[str]:
+def get_trending_topics(limit: int = 10) -> List[str]:
     """Return a list of currently trending topic names."""
     api = get_v1_api()
     try:
@@ -139,7 +140,7 @@ def get_trending_topics(limit: int = 10) -> list[str]:
     return names
 
 
-def find_high_engagement_tweet() -> tuple[str, str]:
+def find_high_engagement_tweet() -> Tuple[str, str]:
     """Return the tweet ID and text of the most engaged recent post."""
     client = authenticate_twitter()
     best_tweet = None
@@ -179,7 +180,7 @@ def find_high_engagement_tweet() -> tuple[str, str]:
     return str(best_tweet.id), best_tweet.text
 
 
-def find_controversial_trending_tweet() -> tuple[str, str]:
+def find_controversial_trending_tweet() -> Tuple[str, str]:
     """Return tweet ID and text for an engaging tweet on a trending topic."""
     client = authenticate_twitter()
     topics = get_trending_topics()
