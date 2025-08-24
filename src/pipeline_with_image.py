@@ -44,7 +44,9 @@ def post_tweet_with_image(headline: str, summary: str, config: TweetConfig) -> O
     # Step 2: generate on-brand image
     prompt = (
         f"Sarcastic political cartoon style image matching this tweet: {text}. "
-        "Bold, edgy, slightly humorous tone. Clear, eye-catching, suitable for social media."
+        "Bold, edgy, conservative, aggressive, conspiratorial tone. "
+        "Clear, eye-catching, suitable for social media. "
+        "Stay within platform policies: no nudity, explicit gore, hate symbols, or other disallowed content."
     )
     img_path = _generate_image(prompt, "tweet_image.png")
 
