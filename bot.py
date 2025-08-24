@@ -65,7 +65,9 @@ def save_posted_cache(data):
 
 def post_latest_tweets(count: int = 1) -> None:
     """Fetch headlines and post ``count`` tweets chosen at random."""
-    headlines = fetch_headlines()
+    # Fetch a larger pool of articles to give the bot more variety when
+    # picking topics for tweets.
+    headlines = fetch_headlines(page_size=20)
 
     if not headlines:
         logger.info("No headlines returned")
