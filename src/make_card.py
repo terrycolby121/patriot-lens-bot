@@ -27,7 +27,12 @@ def _wrap(text: str, font: ImageFont.ImageFont, max_width: int, draw: ImageDraw.
     line = ""
     for word in words:
         test = f"{line} {word}".strip()
-        if draw.textlength(test, font=font) <= max_width:
+
+        if hasattr(draw, "textlength"):
+            width = draw.textlength(test, font=font)
+        else:  # Pillow < 8.0 compatibility
+            width = draw.textsize(test, font=font)[0]
+        if width <= max_width:
             line = test
         else:
             if line:
