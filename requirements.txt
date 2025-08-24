@@ -4,3 +4,4 @@ python-dotenv
 tweepy
 apscheduler
 pytz
+pillow
