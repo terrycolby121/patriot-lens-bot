@@ -42,6 +42,7 @@ You can trigger a single run manually:
 python -c "from src.pipeline_auto_card import post_headline_with_card as p; p()"
 ```
 
+
 Or use a small helper class:
 
 ```python
