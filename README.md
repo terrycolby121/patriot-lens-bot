@@ -42,6 +42,15 @@ You can trigger a single run manually:
 python -c "from src.pipeline_auto_card import post_headline_with_card as p; p()"
 ```
 
+
+Or use a small helper class:
+
+```python
+from src.on_demand import OnDemandTweeter
+
+OnDemandTweeter().post()
+```
+
 Make sure `NEWS_API_KEY` and the Twitter keys are configured in `.env`. Use
 `DRY_RUN=1` to log actions without posting.
 
