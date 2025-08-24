@@ -1,6 +1,9 @@
 # Patriot Lens Bot
 
-A small Twitter/X bot that runs on a Raspberry Pi. It generates branded image cards and posts tweets from a simple CSV queue. Designed for the free tier: only write endpoints are used.
+A small Twitter/X bot that runs on a Raspberry Pi. It now supports an automatic
+headline pipeline that fetches the latest news, generates branded image cards
+and posts them on a schedule. Designed for the free tier: only write endpoints
+are used.
 
 ## Quick start
 
@@ -24,6 +27,31 @@ Run the queue once (dry run by default if no real keys are set):
 ```bash
 DRY_RUN=1 python -m src.post_queue
 ```
+
+## Scheduled headline posts
+
+The legacy scheduler now combines the headline fetcher, composer and image card
+generator. By default it posts a tweet with text and an image card at
+08:00, 12:00, 18:00, 20:00 and 22:00 Eastern.
+
+Set `AUTO_CARD_ENABLED=0` in your environment to fall back to text-only posts.
+
+You can trigger a single run manually:
+
+```bash
+python -c "from src.pipeline_auto_card import post_headline_with_card as p; p()"
+```
+
+Or use a small helper class:
+
+```python
+from src.on_demand import OnDemandTweeter
+
+OnDemandTweeter().post()
+```
+
+Make sure `NEWS_API_KEY` and the Twitter keys are configured in `.env`. Use
+`DRY_RUN=1` to log actions without posting.
 
 ## `make_card.py`
 
