@@ -1,6 +1,6 @@
 from apscheduler.events import EVENT_SCHEDULER_STARTED
 from apscheduler.schedulers.blocking import BlockingScheduler
-from bot import authenticate_twitter, post_scheduled_tweet
+from bot_auto import post_scheduled_tweet
 import logging
 import pytz
 
@@ -10,7 +10,6 @@ RANDOM_JITTER_SECONDS = 10 * 60  # up to 10 minutes
 logger = logging.getLogger(__name__)
 
 def schedule_jobs():
-    api = authenticate_twitter()
     eastern = pytz.timezone("America/New_York")
     sched = BlockingScheduler(timezone=eastern)
 
@@ -20,14 +19,13 @@ def schedule_jobs():
 
     sched.add_listener(log_next_runs, EVENT_SCHEDULER_STARTED)
 
-    # Post at 08:00, 12:00,  18:00, 20:00, 22:00 Eastern time each day
+    # Post at 08:00, 12:00, 18:00, 20:00, 22:00 Eastern time each day
     for hour in (8, 12, 18, 20, 22):
         sched.add_job(
             post_scheduled_tweet,
             trigger="cron",
             hour=hour,
             minute=0,
-            args=[api],
             jitter=RANDOM_JITTER_SECONDS,
             id=f"tweet_{hour}",
         )
