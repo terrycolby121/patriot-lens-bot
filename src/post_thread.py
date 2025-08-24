@@ -91,7 +91,6 @@ def post_thread_from_file(thread_path: str) -> None:
         reply_to = post_single(part, in_reply_to_tweet_id=reply_to)
         time.sleep(2)
 
-
 def post_composed_single(
     headline: str,
     bullets: List[str],
@@ -122,3 +121,4 @@ def post_composed_single(
 
     alt_text = f"{headline}. {' '.join(bullets[:3])} Source: {source}"
     return post_single(text=text, media_path=out_path, alt_text=alt_text)
+
