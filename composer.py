@@ -154,8 +154,14 @@ def sanitize_tweet(text: str) -> str:
     return text.strip()
 
 
-def craft_tweet(headline: str, summary: str = "") -> str:
-    """Create an on-brand tweet for the provided article."""
+def craft_tweet(headline: str, summary: str = "", url: str = "") -> str:
+    """Create an on-brand tweet for the provided article.
+
+    Args:
+        headline: The article headline.
+        summary: Short summary or description of the article.
+        url: Optional article URL for additional context.
+    """
     tags = infer_tags(headline)
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -164,6 +170,7 @@ def craft_tweet(headline: str, summary: str = "") -> str:
             "role": "user",
             "content": (
                 f'Headline: "{headline}"\n'
+                f'URL: {url}\n'
                 f'Summary: "{summary}"\n'
                 "Guideline: start with a 3-6 word topic summary, not a quote,"
                 " then your comment. Output:"
@@ -203,6 +210,7 @@ def craft_tweet(headline: str, summary: str = "") -> str:
 if __name__ == "__main__":
     sample = craft_tweet(
         "Senate approves a $1.5T spending bill with no border security",
-        "Massive government spending continues with zero commitment to border protections."
+        "Massive government spending continues with zero commitment to border protections.",
+        url="https://example.com/article",
     )
     print("🔹 Sample tweet:\n", sample)
