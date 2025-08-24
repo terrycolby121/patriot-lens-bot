@@ -1,7 +1,6 @@
-import os
-import random
 import json
 import logging
+import random
 from datetime import datetime, timedelta
 
 try:
@@ -22,10 +21,10 @@ except Exception:  # Python <3.2 fallback
 
     UTC = _UTC()
 
-import tweepy
 from dotenv import load_dotenv
 from news_fetcher import fetch_headlines, print_article
-from composer import craft_tweet
+from composer import TweetConfig
+from src.pipeline_with_image import post_tweet_with_image
 
 load_dotenv()
 
@@ -39,24 +38,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Grab credentials from environment variables so they can be provided in
-# the .env file during local development.
-TWITTER_API_KEY = os.getenv("TWITTER_API_KEY")
-TWITTER_API_SECRET = os.getenv("TWITTER_API_SECRET")
-TWITTER_ACCESS_TOKEN = os.getenv("TWITTER_ACCESS_TOKEN")
-TWITTER_ACCESS_TOKEN_SECRET = os.getenv("TWITTER_ACCESS_TOKEN_SECRET")
-
 POSTED_CACHE = "posted.json"
-
-def authenticate_twitter():
-    """Create a Tweepy Client using OAuth1 user context."""
-    return tweepy.Client(
-        consumer_key=TWITTER_API_KEY,
-        consumer_secret=TWITTER_API_SECRET,
-        access_token=TWITTER_ACCESS_TOKEN,
-        access_token_secret=TWITTER_ACCESS_TOKEN_SECRET,
-        wait_on_rate_limit=True,
-    )
 
 
 def load_posted_cache():
@@ -81,7 +63,7 @@ def save_posted_cache(data):
     with open(POSTED_CACHE, "w") as f:
         json.dump(data[-50:], f)
 
-def post_latest_tweets(api, count=1):
+def post_latest_tweets(count: int = 1) -> None:
     """Fetch headlines and post ``count`` tweets chosen at random."""
     headlines = fetch_headlines()
 
@@ -107,20 +89,9 @@ def post_latest_tweets(api, count=1):
         headline = choice.get("title") if isinstance(choice, dict) else choice
         summary = choice.get("summary", "") if isinstance(choice, dict) else ""
 
-        tweet = craft_tweet(headline, summary)
-        logger.info("Tweet: %s", tweet)
         try:
-            resp = api.create_tweet(text=tweet)
-            tweet_id = resp.data.get("id") if hasattr(resp, "data") else None
-            if tweet_id:
-                logger.info("Posted tweet ID: %s", tweet_id)
-            else:
-                logger.info("Posted successfully")
-
-            if random.random() < 0.2:
-                follow_up = craft_tweet(headline, summary)
-                api.create_tweet(text=follow_up, in_reply_to_tweet_id=tweet_id)
-                logger.info("Posted thread follow-up")
+            tweet_id = post_tweet_with_image(headline, summary, TweetConfig())
+            logger.info("Posted tweet ID: %s", tweet_id)
 
             cache.append({
                 "type": "headline",
@@ -132,10 +103,10 @@ def post_latest_tweets(api, count=1):
             logger.error("Error posting: %s", e)
 
 
-def post_scheduled_tweet(api):
+def post_scheduled_tweet() -> None:
     """Post a single headline tweet."""
-    post_latest_tweets(api, 1)
+    post_latest_tweets(1)
+
 
 if __name__ == "__main__":
-    api = authenticate_twitter()
-    post_scheduled_tweet(api)
+    post_scheduled_tweet()
