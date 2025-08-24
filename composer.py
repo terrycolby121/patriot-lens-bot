@@ -1,11 +1,12 @@
 import os
 import random
 import re
-from typing import List
+from dataclasses import dataclass, field
+from typing import List, Optional
 
 try:
     from dotenv import load_dotenv
-except ImportError as exc:  # pragma: no cover - helpful runtime check
+except ImportError as exc:  # pragma: no cover
     raise RuntimeError(
         "python-dotenv package is required. Install dependencies from requirements.txt"
     ) from exc
@@ -18,7 +19,7 @@ except ImportError:
     try:
         import openai
         _use_new_client = False
-    except ImportError as exc:  # pragma: no cover - helpful runtime check
+    except ImportError as exc:  # pragma: no cover
         raise RuntimeError(
             "openai package is required. Install dependencies from requirements.txt"
         ) from exc
@@ -31,186 +32,331 @@ else:
     openai.api_key = os.getenv("OPENAI_API_KEY")
     client = openai
 
-# A concise system prompt defining the persona & constraints
+
+# =========================
+# Engagement-Oriented Config
+# =========================
+
+@dataclass
+class TweetConfig:
+    """
+    Engagement-focused configuration for tweet generation.
+
+    Why this helps engagement:
+    - Lets you vary tone/length to avoid "botty" repetition.
+    - Enables/limits hashtags to keep them sparing and on-brand.
+    - Adds light randomization to boost perceived authenticity.
+    """
+    tone: str = "edgy, plain-spoken, confident"               # high-level vibe
+    max_length: int = 280                                      # API hard limit
+    max_hashtags: int = 1                                      # 'sparingly' by default
+    allow_hashtags: bool = True
+    use_questions_ratio: float = 0.35                          # curiosity + replies
+    use_cta_ratio: float = 0.20                                # retweets/replies/follows
+    include_emojis: bool = False                               # use sparingly; off by default
+    trending_keywords: List[str] = field(default_factory=list) # inject from your scheduler if you fetch trends elsewhere
+    brand_hashtags: List[str] = field(default_factory=lambda: ["#AmericaFirst"])
+    # protect against spammy patterns:
+    dedupe_window_keywords: int = 5                            # limit repeated topical tags across recent tweets (handled upstream if you store history)
+    # output safety:
+    strip_ai_markers: bool = True
+    # LLM parameters:
+    model: str = "gpt-4o-mini"
+    temperature: float = 0.7
+    max_tokens: int = 120
+
+
+# =========================
+# Brand Voice & Prompting
+# =========================
+
+# A sharpened but platform-safe system prompt that preserves your theme
+# while optimizing for reach & authenticity (concise, readable, non-spammy).
 SYSTEM_PROMPT = (
-"You are Patriot Lens, a ruthless, edgy conservative firebrand on Twitter."
-"\n\nMission:\n • Rip apart elitist narratives, call out corruption, and question the hidden power structures shaping policy.\n"
-"\nStyle & Structure:\n • Start with a 3–6 word strike line (not a direct quote), then a colon.\n"
-" • Under 240 characters, no hashtags.\n"
-" • Drop at least one sharp detail (statistic, leaked memo, historical parallel, or direct quote).\n"
-" • Use one vivid metaphor or analogy that paints opponents as duplicitous or cowardly.\n"
-" • Mix sentence lengths: a punchy phrase, a mid-length hit, then a longer cutting observation.\n"
-" • End with a provocative or accusatory question when possible.\n"
-"\nAggression Upgrade:\n • Sharpen tone—call out names or groups directly if they’re complicit or weak.\n"
-" • Imply ulterior motives or conspiracies (e.g., \"this feels like a boardroom coup dressed up as democracy\").\n"
-" • Use intellectual jabs—mock hypocrisy, incompetence, or virtue signaling.\n"
-"\nOriginality Rules:\n • Skip tired clichés: no “fake news,” “they don’t want you to know,” etc.\n"
-" • Pivot to fresh, darker comparisons—e.g., liken corruption to “rats fighting over poisoned cheese.”\n"
-"\nVoice Reminders:\n • Bold, biting, unfiltered.\n"
-" • Stand firm on rugged individualism, limited government, and ‘America First’ values.\n"
-" • Personal attacks should cut with wit, not vulgarity—sound like a sharp-tongued dissident, not a troll.\n"
-"\nDeliver only the most scorching take—no fluff, no compromise."
+    "You are Patriot Lens—an edgy, sharp-tongued conservative commentator on Twitter "
+    "who values rugged individualism, limited government, and America First priorities.\n\n"
+    "Objectives:\n"
+    "• Create concise, scannable tweets that maximize engagement (likes/replies/retweets/follows).\n"
+    "• Preserve voice: bold, witty, pointed; no vulgarity; avoid clichés; avoid unsubstantiated conspiracy claims.\n"
+    "• Use hooks, relatable phrasing, curiosity gaps, and—sparingly—hashtags.\n"
+    "• Vary forms: headlines, insights, questions, conversation starters.\n"
+    "• Keep under 280 chars; clear, readable; no walls of text.\n"
 )
 
-
-
-# Two few-shot examples to teach the format
-EXAMPLES = [
-    {
-        "role": "user",
-        "content": 'Input: "City council bans patriotic flags at public rallies."'
-    },
-    {
-        "role": "assistant",
-        "content": (
-            "They censor our flag today, they'll censor our speech tomorrow. "
-            "Stand up for true patriotism!"
-        )
-    },
-    {
-        "role": "user",
-        "content": 'Input: "New tax plan hikes rates on middle-class families."'
-    },
-    {
-        "role": "assistant",
-        "content": (
-            "They promise fairness while squeezing hardworking Americans. "
-            "Who really wins here?"
-        )
-    }
+# Lightweight, reusable fragments that prompt the model to produce
+# specific engagement-forward structures while keeping variety.
+HOOKS = [
+    "Quick hit",
+    "Hard truth",
+    "Worth asking",
+    "Let’s be honest",
+    "Numbers don’t lie",
+    "Reality check",
+    "Here’s the tell",
+    "Watch this trend",
 ]
 
-# Map keywords in a headline to topical hashtags
+CTAS = [
+    "Agree?",
+    "Thoughts?",
+    "Save this for later.",
+    "Send this to a friend who should see it.",
+    "If this tracks, say why.",
+    "Bookmark this for the next debate.",
+]
+
+QUESTION_OPENERS = [
+    "Be honest—",
+    "Serious question—",
+    "If this is 'normal,' why—",
+    "What are we missing—",
+    "So riddle me this—",
+]
+
+
+# =========================
+# Hashtag & Keyword Mapping
+# =========================
+
 TOPICAL_KEYWORDS = {
-    "border": "#BorderCrisis",
-    "immigration": "#SecureTheBorder",
+    "border": "#BorderSecurity",
+    "immigration": "#BorderSecurity",
     "spending": "#Inflation",
-    "debt": "#Bidenomics",
-    "tax": "#TaxTheft",
+    "debt": "#Economy",
+    "tax": "#Taxes",
     "crime": "#LawAndOrder",
-    "police": "#BackTheBlue",
-    "education": "#WokeSchools",
-    "trans": "#ProtectOurKids",
-    "gender": "#BiologyMatters",
-    "climate": "#ClimateScam",
-    "energy": "#DrillBabyDrill",
-    "fossil": "#EnergyIndependence",
+    "police": "#LawAndOrder",
+    "education": "#Education",
+    "gender": "#ParentsMatter",
+    "climate": "#Energy",
+    "energy": "#Energy",
+    "fossil": "#Energy",
     "gun": "#2A",
     "second amendment": "#2A",
     "censorship": "#FreeSpeech",
-    "social media": "#BigTechBias",
+    "social media": "#FreeSpeech",
     "election": "#ElectionIntegrity",
-    "voting": "#SecureElections",
-    "china": "#ChinaThreat",
-    "ukraine": "#AmericaFirst",
-    "israel": "#StandWithIsrael",
+    "voting": "#ElectionIntegrity",
+    "china": "#China",
+    "ukraine": "#ForeignPolicy",
+    "israel": "#ForeignPolicy",
     "patriot": "#AmericaFirst",
-    "military": "#SupportOurTroops",
-    "student loan": "#BailoutBlues",
-    "covid": "#Plandemic",
-    "mask": "#MedicalFreedom",
-    "vaccine": "#MyBodyMyChoice",
-    "mandate": "#NoMandates",
-    "biden": "#BidenFails",
-    "trump": "#MAGA",
-    "gas": "#PainAtThePump",
-    "iran": "#NoDealWithIran",
+    "military": "#NationalSecurity",
+    "student loan": "#Economy",
+    "covid": "#PublicHealth",
+    "mask": "#PublicHealth",
+    "vaccine": "#PublicHealth",
+    "mandate": "#PublicHealth",
+    "biden": "#Politics",
+    "trump": "#Politics",
+    "gas": "#Economy",
+    "iran": "#ForeignPolicy",
 }
 
-# Generic high-engagement hashtags that align with the brand
-HIGH_VALUE_TAGS = ["#tcot", "#AmericaFirst", "#RedWave2026", "#SaveAmerica"]
+GENERIC_NEWS_TAG = "#News"
 
 
-def infer_tag(headline: str) -> str:
-    """Return an appropriate topical hashtag for the headline."""
-    text = (headline or "").lower()
-    for keyword, tag in TOPICAL_KEYWORDS.items():
-        if keyword in text:
-            return tag
-    return "#News"
-
-
-def infer_tags(headline: str, limit: int = 2) -> List[str]:
-    """Return up to ``limit`` hashtags related to ``headline``."""
-    text = (headline or "").lower()
-    tags = [tag for keyword, tag in TOPICAL_KEYWORDS.items() if keyword in text]
-    # Deduplicate while preserving order
-    tags = list(dict.fromkeys(tags))
-    if len(tags) < limit:
-        remaining = limit - len(tags)
-        tags.extend(random.sample(HIGH_VALUE_TAGS, k=remaining))
-    return tags[:limit]
-
-def sanitize_tweet(text: str) -> str:
-    """Remove AI disclaimers and disallowed punctuation."""
-    text = text.replace("—", "-")
-    patterns = [
-        r"(?i)as an ai[^.?!]*[.?!]?",
-        r"(?i)i(?: am|'m) an ai[^.?!]*[.?!]?",
-        r"(?i)as a language model[^.?!]*[.?!]?",
-    ]
-    for pat in patterns:
-        text = re.sub(pat, "", text)
-    return text.strip()
-
-
-def craft_tweet(headline: str, summary: str = "", url: str = "") -> str:
-    """Create an on-brand tweet for the provided article.
-
-    Args:
-        headline: The article headline.
-        summary: Short summary or description of the article.
-        url: Optional article URL for additional context.
+def _infer_topical_tags(text: str, limit: int, seed_tags: List[str]) -> List[str]:
     """
-    tags = infer_tags(headline)
-    messages = [
+    Find relevant topical tags from headline/summary; backfill with brand/trending.
+
+    Engagement rationale:
+    - Keeps hashtags highly relevant and minimal (sparingly).
+    - Allows you to inject current trends from your scheduler ingestion.
+    """
+    text_lc = (text or "").lower()
+    tags = []
+    for kw, tag in TOPICAL_KEYWORDS.items():
+        if kw in text_lc and tag not in tags:
+            tags.append(tag)
+
+    # backfill with trending/brand tags (non-duplicates)
+    for t in seed_tags:
+        if t not in tags:
+            tags.append(t)
+
+    if not tags:
+        tags = [GENERIC_NEWS_TAG]
+
+    return tags[:max(0, limit)]
+
+
+def _sanitize(text: str) -> str:
+    """
+    Remove common AI disclaimers and normalize punctuation.
+    """
+    text = text.replace("—", "-")
+    if re.search(r"(?i)\bas an ai\b|\bi am an ai\b|\bas a language model\b", text):
+        text = re.sub(r"(?i)as an ai[^.?!]*[.?!]?\s*", "", text)
+        text = re.sub(r"(?i)i(?: am|'m) an ai[^.?!]*[.?!]?\s*", "", text)
+        text = re.sub(r"(?i)as a language model[^.?!]*[.?!]?\s*", "", text)
+    # collapse excessive punctuation / spaces
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"([!?])\1{2,}", r"\1\1", text)   # no !!! spam
+    text = re.sub(r"#([A-Za-z0-9_]{1,50})(?:\s*#\1)+", r"#\1", text)  # de-dupe repeated tag words
+    return text
+
+
+def _maybe_add_question(text: str, ratio: float) -> str:
+    """
+    Occasionally end with a short question to prompt replies.
+
+    Engagement rationale:
+    - Questions invite responses & boosts reply metrics.
+    """
+    if random.random() < ratio and not text.rstrip().endswith("?"):
+        q = random.choice(QUESTION_OPENERS)
+        # Ensure we stay concise:
+        if len(text) + len(" " + q + " ?") <= 260:  # leave room for a tag
+            return f"{text} {q}?"
+    return text
+
+
+def _maybe_add_cta(text: str, ratio: float) -> str:
+    """
+    Occasionally add a brief CTA.
+
+    Engagement rationale:
+    - CTAs nudge users to reply/bookmark/share without sounding spammy.
+    """
+    if random.random() < ratio:
+        cta = random.choice(CTAS)
+        if len(text) + len(" " + cta) <= 260:
+            return f"{text} {cta}"
+    return text
+
+
+def _emoji_guard(text: str, allow: bool) -> str:
+    """
+    Allow or remove emojis based on config to keep style consistent.
+    """
+    if allow:
+        return text
+    return re.sub(r"[^\w\s.,:;/?@#'\-\(\)%!]", "", text)  # strip non-basic emoji/symbols
+
+
+def _trim_to_length(base: str, tags: List[str], max_len: int) -> str:
+    """
+    Compose final tweet with tags and trim safely under character limit.
+    """
+    hashtag_str = ""
+    if tags:
+        hashtag_str = " " + " ".join(tags)
+    avail = max_len - len(hashtag_str)
+    base = base[:max(0, avail)].rstrip()
+    return f"{base}{hashtag_str}"
+
+
+def _build_messages(headline: str, summary: str, cfg: TweetConfig) -> List[dict]:
+    """
+    Builds the LLM messages with light structure cues for variety.
+
+    Engagement rationale:
+    - Hooks + concise structure improves scannability.
+    - Explicit variety signals reduce repetitive outputs.
+    """
+    hook = random.choice(HOOKS)
+
+    style_nudges = random.choice([
+        "Format: hook + key detail + insight.",
+        "Format: headline-style + one-liner takeaway.",
+        "Format: counterintuitive insight + short reason.",
+        "Format: question-led opener + quick punchline.",
+        "Format: observation + comparison/metaphor.",
+    ])
+
+    user_prompt = (
+        f"Headline: \"{headline}\"\n"
+        f"Summary: \"{summary or ''}\"\n\n"
+        f"Constraints:\n"
+        f"- Start with a brief hook like \"{hook}:\" (no quotes).\n"
+        f"- Tone: {cfg.tone}.\n"
+        f"- Keep it under {cfg.max_length} chars; highly readable.\n"
+        f"- Avoid clichés and walls of text; no vulgarity.\n"
+        f"- Use relatable phrasing; one crisp detail if possible.\n"
+        f"- {style_nudges}\n"
+        f"- Vary sentence lengths. 1-2 short, 1 medium.\n"
+        f"- Output a single tweet only.\n"
+    )
+
+    return [
         {"role": "system", "content": SYSTEM_PROMPT},
-        *EXAMPLES,
-        {
-            "role": "user",
-            "content": (
-                f'Headline: "{headline}"\n'
-                f'URL: {url}\n'
-                f'Summary: "{summary}"\n'
-                "Guideline: start with a 3-6 word topic summary, not a quote,"
-                " then your comment. Output:"
-            ),
-        },
+        {"role": "user", "content": user_prompt},
     ]
 
+
+def craft_tweet(
+    headline: str,
+    summary: str = "",
+    config: Optional[TweetConfig] = None
+) -> str:
+    """
+    Create an on-brand, engagement-optimized tweet for the provided topic.
+
+    Engagement-supporting behavior:
+    - Hooks/questions/CTAs added stochastically to prompt conversation.
+    - Hashtags kept minimal & relevant to avoid spammy feel.
+    - Strict 280-char enforcement with clean text sanitation.
+    """
+    cfg = config or TweetConfig()
+
+    # Build messages for the LLM with variety & clarity baked in.
+    messages = _build_messages(headline, summary, cfg)
+
+    # Call OpenAI with either the new or legacy client
     if _use_new_client:
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=cfg.model,
             messages=messages,
-            max_tokens=60,
-            temperature=0.7,
+            max_tokens=cfg.max_tokens,
+            temperature=cfg.temperature,
         )
-        tweet = resp.choices[0].message.content.strip()
+        text = resp.choices[0].message.content.strip()
     else:
         resp = client.ChatCompletion.create(
-            model="gpt-4o-mini",
+            model=cfg.model,
             messages=messages,
-            max_tokens=60,
-            temperature=0.7,
+            max_tokens=cfg.max_tokens,
+            temperature=cfg.temperature,
         )
-        tweet = resp["choices"][0]["message"]["content"].strip()
+        text = resp["choices"][0]["message"]["content"].strip()
 
-    tweet = sanitize_tweet(tweet)
+    # Post-process for platform polish & engagement:
+    text = _sanitize(text)
+    text = _maybe_add_question(text, cfg.use_questions_ratio)
+    text = _maybe_add_cta(text, cfg.use_cta_ratio)
+    text = _emoji_guard(text, cfg.include_emojis)
 
-    hashtags = " ".join(tags)
-    avail_len = 280 - len(hashtags) - 1  # space before hashtags
-    tweet = tweet[:avail_len].strip()
+    # Hashtags (sparingly) — combine topical + scheduler-provided trending + brand
+    tags: List[str] = []
+    if cfg.allow_hashtags and cfg.max_hashtags > 0:
+        seed = list(dict.fromkeys(cfg.trending_keywords + cfg.brand_hashtags))
+        topical = _infer_topical_tags(
+            text=(headline or "") + " " + (summary or ""),
+            limit=cfg.max_hashtags,
+            seed_tags=seed
+        )
+        # De-duplicate and keep order
+        tags = list(dict.fromkeys([t for t in topical if t.startswith("#")][:cfg.max_hashtags]))
 
-    final_tweet = f"{tweet} {hashtags}".strip()
-
+    # Final length guard with tags appended:
+    final_tweet = _trim_to_length(text, tags, cfg.max_length)
     return final_tweet
 
 
-# Quick smoke-test
+# ==============
+# Quick Smoke Test
+# ==============
 if __name__ == "__main__":
+    sample_cfg = TweetConfig(
+        max_hashtags=1,
+        allow_hashtags=True,
+        trending_keywords=["#Economy"],  # e.g., injected by your scheduler layer
+        include_emojis=False,
+    )
     sample = craft_tweet(
         "Senate approves a $1.5T spending bill with no border security",
         "Massive government spending continues with zero commitment to border protections.",
-        url="https://example.com/article",
+        config=sample_cfg
     )
     print("🔹 Sample tweet:\n", sample)
