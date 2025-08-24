@@ -90,3 +90,35 @@ def post_thread_from_file(thread_path: str) -> None:
     for part in parts:
         reply_to = post_single(part, in_reply_to_tweet_id=reply_to)
         time.sleep(2)
+
+def post_composed_single(
+    headline: str,
+    bullets: List[str],
+    source: str,
+    out_path: str,
+) -> Optional[str]:
+    """Craft a tweet via :mod:`composer`, render a card, and post it.
+
+    Args:
+        headline: Main headline text for the card and tweet.
+        bullets: Up to three supporting bullet points.
+        source: Attribution for the card and tweet.
+        out_path: Where to save the generated JPEG card.
+
+    Returns:
+        The tweet ID if posted, or ``None`` when ``DRY_RUN`` is enabled.
+    """
+    # Import heavy deps lazily so other helpers can run without them.
+    import composer  # type: ignore
+    from . import make_card  # type: ignore
+
+    # Compose tweet text in the Patriot Lens voice
+    summary = " ".join(bullets)
+    text = composer.craft_tweet(headline, summary)
+
+    # Generate the image card
+    make_card.make_card(headline, bullets, source, out_path)
+
+    alt_text = f"{headline}. {' '.join(bullets[:3])} Source: {source}"
+    return post_single(text=text, media_path=out_path, alt_text=alt_text)
+

@@ -37,6 +37,24 @@ make_card(
 )
 ```
 
+## Composing tweets
+
+Use `composer.py` to craft on-brand copy from a headline and bullets, then
+generate a matching card and post it in one step:
+
+```python
+from src.post_thread import post_composed_single
+
+post_composed_single(
+    headline="Demo headline",
+    bullets=["First point", "Second point", "Third point"],
+    source="example.com",
+    out_path="media_cards/demo.jpg",
+)
+```
+
+Set `OPENAI_API_KEY` in your `.env` for the composer to work.
+
 ## Queue format
 
 `queue.csv` columns:
