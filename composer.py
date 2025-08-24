@@ -61,7 +61,8 @@ class TweetConfig:
     # output safety:
     strip_ai_markers: bool = True
     # LLM parameters:
-    model: str = "gpt-4o-mini"
+    # Upgrading to GPT-4o sharpens wit and variety, yielding more shareable copy.
+    model: str = "gpt-4o"
     temperature: float = 0.7
     max_tokens: int = 120
 

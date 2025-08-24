@@ -29,7 +29,10 @@ def fetch_top_articles(limit: int = 1, country: str = "us", category: str = "pol
         "from": (datetime.now() - timedelta(hours=2)).isoformat(),
     }
     logger.info("Fetching from %s", BASE_URL)
-    logger.info("Params: %s", params)
+    safe_params = params.copy()
+    if "apiKey" in safe_params:
+        safe_params["apiKey"] = "***"
+    logger.info("Params: %s", safe_params)
     resp = requests.get(BASE_URL, params=params)
     logger.info("Status: %s", resp.status_code)
     try:
@@ -54,8 +57,13 @@ def fetch_top_articles(limit: int = 1, country: str = "us", category: str = "pol
     return articles
 
 
-def fetch_headlines(country="us", category="politics", page_size=5):
-    """Backward compatible wrapper around :func:`fetch_top_articles`."""
+def fetch_headlines(country="us", category="politics", page_size=20):
+    """Backward compatible wrapper around :func:`fetch_top_articles`.
+
+    The higher default ``page_size`` fetches more articles so the bot has
+    a broader pool to select from when crafting tweets, improving variety
+    and engagement.
+    """
     return [
         {"title": a["title"], "summary": a["summary"]}
         for a in fetch_top_articles(limit=page_size, country=country, category=category)
