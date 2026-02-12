@@ -321,19 +321,27 @@ def _build_messages(
     ]
 
 
+def _supports_custom_temperature(model_name: str) -> bool:
+    """GPT-5 chat models currently only support default temperature behavior."""
+    return not model_name.lower().startswith("gpt-5")
+
+
+
 def _generate_candidate(messages: List[dict], cfg: TweetConfig) -> str:
     """Generate one candidate tweet from the active LLM client."""
-    sampled_temp = min(1.1, max(0.35, cfg.temperature + random.uniform(-0.18, 0.15)))
     models = [cfg.model] + [m for m in FALLBACK_TWEET_MODELS if m != cfg.model]
     last_error: Optional[Exception] = None
     for model_name in models:
+        sampled_temp = min(1.1, max(0.35, cfg.temperature + random.uniform(-0.18, 0.15)))
+        allow_custom_temp = _supports_custom_temperature(model_name)
         try:
             if _use_new_client:
                 request_kwargs = {
                     "model": model_name,
                     "messages": messages,
-                    "temperature": sampled_temp,
                 }
+                if allow_custom_temp:
+                    request_kwargs["temperature"] = sampled_temp
                 try:
                     resp = client.chat.completions.create(
                         **request_kwargs,
@@ -389,8 +397,9 @@ def _generate_candidate(messages: List[dict], cfg: TweetConfig) -> str:
                 "model": model_name,
                 "messages": messages,
                 "max_tokens": cfg.max_completion_tokens,
-                "temperature": sampled_temp,
             }
+            if allow_custom_temp:
+                legacy_kwargs["temperature"] = sampled_temp
             try:
                 resp = client.ChatCompletion.create(**legacy_kwargs)
             except Exception as legacy_temp_exc:
