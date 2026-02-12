@@ -2,7 +2,7 @@ import os
 import random
 import re
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 try:
     from dotenv import load_dotenv
@@ -25,6 +25,14 @@ except ImportError:
         ) from exc
 
 load_dotenv()
+
+DEFAULT_TWEET_MODEL = os.getenv("OPENAI_TWEET_MODEL", "gpt-5-mini")
+FALLBACK_TWEET_MODELS = [
+    m.strip()
+    for m in os.getenv("OPENAI_TWEET_MODEL_FALLBACKS", "gpt-4o,gpt-4.1-mini")
+    .split(",")
+    if m.strip()
+]
 
 if _use_new_client:
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -61,10 +69,11 @@ class TweetConfig:
     # output safety:
     strip_ai_markers: bool = True
     # LLM parameters:
-    # Upgrading to GPT-4o sharpens wit and variety, yielding more shareable copy.
-    model: str = "gpt-4o"
+    # Set via OPENAI_TWEET_MODEL; defaults to gpt-5-mini.
+    model: str = DEFAULT_TWEET_MODEL
     temperature: float = 0.7
     max_tokens: int = 120
+    candidate_count: int = 6
 
 
 # =========================
@@ -95,6 +104,15 @@ HOOKS = [
     "Reality check",
     "Here’s the tell",
     "Watch this trend",
+]
+
+STYLE_ANGLES = [
+    "Lead with a punchy comparison and one concrete detail.",
+    "Lead with a trend observation and a skeptical takeaway.",
+    "Lead with a contradiction and one sentence of context.",
+    "Lead with a plain-language consequence for everyday Americans.",
+    "Lead with a data point framing and an opinionated conclusion.",
+    "Lead with a short challenge statement and one-line rationale.",
 ]
 
 CTAS = [
@@ -236,19 +254,41 @@ def _emoji_guard(text: str, allow: bool) -> str:
     return re.sub(r"[^\w\s.,:;/?@#'\-\(\)%!]", "", text)  # strip non-basic emoji/symbols
 
 
-def _trim_to_length(base: str, tags: List[str], max_len: int) -> str:
-    """
-    Compose final tweet with tags and trim safely under character limit.
-    """
-    hashtag_str = ""
+def _trim_to_length(base: str, tags: List[str], max_len: int, url: str = "") -> str:
+    """Compose final tweet under ``max_len`` without cutting URL/hashtags mid-token."""
+    suffix_parts: List[str] = []
+    if url:
+        suffix_parts.append(url.strip())
     if tags:
-        hashtag_str = " " + " ".join(tags)
-    avail = max_len - len(hashtag_str)
-    base = base[:max(0, avail)].rstrip()
-    return f"{base}{hashtag_str}"
+        suffix_parts.extend(tags)
+
+    suffix = ""
+    if suffix_parts:
+        suffix = " " + " ".join([p for p in suffix_parts if p])
+
+    avail = max_len - len(suffix)
+    if avail < 0:
+        # Keep only as many suffix tokens as fit; prioritize URL first then hashtags.
+        kept: List[str] = []
+        for token in suffix_parts:
+            candidate = (" ".join(kept + [token])).strip()
+            if len(candidate) <= max_len:
+                kept.append(token)
+        suffix = (" " + " ".join(kept)) if kept else ""
+        avail = max_len - len(suffix)
+
+    trimmed_base = base[:max(0, avail)].rstrip()
+    final = f"{trimmed_base}{suffix}".strip()
+    return final[:max_len]
 
 
-def _build_messages(headline: str, summary: str, cfg: TweetConfig) -> List[dict]:
+def _build_messages(
+    headline: str,
+    summary: str,
+    cfg: TweetConfig,
+    style_nudge: str,
+    hook: str,
+) -> List[dict]:
     """
     Builds the LLM messages with light structure cues for variety.
 
@@ -256,16 +296,6 @@ def _build_messages(headline: str, summary: str, cfg: TweetConfig) -> List[dict]
     - Hooks + concise structure improves scannability.
     - Explicit variety signals reduce repetitive outputs.
     """
-    hook = random.choice(HOOKS)
-
-    style_nudges = random.choice([
-        "Format: hook + key detail + insight.",
-        "Format: headline-style + one-liner takeaway.",
-        "Format: counterintuitive insight + short reason.",
-        "Format: question-led opener + quick punchline.",
-        "Format: observation + comparison/metaphor.",
-    ])
-
     user_prompt = (
         f"Headline: \"{headline}\"\n"
         f"Summary: \"{summary or ''}\"\n\n"
@@ -275,7 +305,7 @@ def _build_messages(headline: str, summary: str, cfg: TweetConfig) -> List[dict]
         f"- Keep it under {cfg.max_length} chars; highly readable.\n"
         f"- Avoid clichés and walls of text; no vulgarity.\n"
         f"- Use relatable phrasing; one crisp detail if possible.\n"
-        f"- {style_nudges}\n"
+        f"- {style_nudge}\n"
         f"- Vary sentence lengths. 1-2 short, 1 medium.\n"
         f"- Output a single tweet only.\n"
     )
@@ -286,9 +316,79 @@ def _build_messages(headline: str, summary: str, cfg: TweetConfig) -> List[dict]
     ]
 
 
+def _generate_candidate(messages: List[dict], cfg: TweetConfig) -> str:
+    """Generate one candidate tweet from the active LLM client."""
+    sampled_temp = min(1.1, max(0.35, cfg.temperature + random.uniform(-0.18, 0.15)))
+    models = [cfg.model] + [m for m in FALLBACK_TWEET_MODELS if m != cfg.model]
+    last_error: Optional[Exception] = None
+    for model_name in models:
+        try:
+            if _use_new_client:
+                resp = client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    max_tokens=cfg.max_tokens,
+                    temperature=sampled_temp,
+                )
+                return (resp.choices[0].message.content or "").strip()
+            resp = client.ChatCompletion.create(
+                model=model_name,
+                messages=messages,
+                max_tokens=cfg.max_tokens,
+                temperature=sampled_temp,
+            )
+            return resp["choices"][0]["message"]["content"].strip()
+        except Exception as exc:
+            err_txt = str(exc).lower()
+            if "model_not_found" in err_txt or "does not exist" in err_txt or "access" in err_txt:
+                last_error = exc
+                continue
+            raise
+    raise RuntimeError(
+        f"No accessible tweet model found. Tried: {', '.join(models)}"
+    ) from last_error
+
+
+def _score_candidate(text: str, headline: str, summary: str, cfg: TweetConfig) -> float:
+    """Heuristic scoring to prefer specific, varied, readable tweet candidates."""
+    score = 0.0
+    words = re.findall(r"[A-Za-z0-9']+", text.lower())
+    unique_ratio = (len(set(words)) / len(words)) if words else 0.0
+    score += unique_ratio * 2.5
+
+    char_len = len(text)
+    if 95 <= char_len <= 235:
+        score += 1.5
+    elif char_len < 60:
+        score -= 1.0
+    elif char_len > cfg.max_length:
+        score -= 3.0
+
+    if "?" in text:
+        score += 0.25
+    if re.search(r"\b(why|how|what|when)\b", text.lower()):
+        score += 0.2
+    if re.search(r"\b(think|feel|notice|watch|look)\b", text.lower()):
+        score += 0.15
+
+    source = f"{headline} {summary}".lower()
+    overlap = sum(1 for w in set(words) if len(w) > 4 and w in source)
+    score += min(2.0, overlap * 0.2)
+
+    stale_openers = ("quick hit:", "hard truth:", "reality check:")
+    if text.lower().startswith(stale_openers):
+        score -= 0.3
+
+    if re.search(r"([!?])\1{2,}", text):
+        score -= 0.4
+
+    return score
+
+
 def craft_tweet(
     headline: str,
     summary: str = "",
+    url: str = "",
     config: Optional[TweetConfig] = None
 ) -> str:
     """
@@ -301,31 +401,28 @@ def craft_tweet(
     """
     cfg = config or TweetConfig()
 
-    # Build messages for the LLM with variety & clarity baked in.
-    messages = _build_messages(headline, summary, cfg)
+    candidate_count = max(1, cfg.candidate_count)
+    candidates: List[Tuple[float, str]] = []
+    for _ in range(candidate_count):
+        messages = _build_messages(
+            headline=headline,
+            summary=summary,
+            cfg=cfg,
+            style_nudge=random.choice(STYLE_ANGLES),
+            hook=random.choice(HOOKS),
+        )
+        raw_text = _generate_candidate(messages, cfg)
+        cleaned = _emoji_guard(_sanitize(raw_text), cfg.include_emojis)
+        scored = _score_candidate(cleaned, headline, summary, cfg)
+        candidates.append((scored, cleaned))
 
-    # Call OpenAI with either the new or legacy client
-    if _use_new_client:
-        resp = client.chat.completions.create(
-            model=cfg.model,
-            messages=messages,
-            max_tokens=cfg.max_tokens,
-            temperature=cfg.temperature,
-        )
-        text = resp.choices[0].message.content.strip()
-    else:
-        resp = client.ChatCompletion.create(
-            model=cfg.model,
-            messages=messages,
-            max_tokens=cfg.max_tokens,
-            temperature=cfg.temperature,
-        )
-        text = resp["choices"][0]["message"]["content"].strip()
+    candidates.sort(key=lambda c: c[0], reverse=True)
+    text = candidates[0][1]
 
     # Post-process for platform polish & engagement:
-    text = _sanitize(text)
     text = _maybe_add_question(text, cfg.use_questions_ratio)
     text = _maybe_add_cta(text, cfg.use_cta_ratio)
+    text = _sanitize(text)
     text = _emoji_guard(text, cfg.include_emojis)
 
     # Hashtags (sparingly) — combine topical + scheduler-provided trending + brand
@@ -341,7 +438,7 @@ def craft_tweet(
         tags = list(dict.fromkeys([t for t in topical if t.startswith("#")][:cfg.max_hashtags]))
 
     # Final length guard with tags appended:
-    final_tweet = _trim_to_length(text, tags, cfg.max_length)
+    final_tweet = _trim_to_length(text, tags, cfg.max_length, url=url)
     return final_tweet
 
 
