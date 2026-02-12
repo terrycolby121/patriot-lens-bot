@@ -80,15 +80,14 @@ def post_single(
 
 
 def post_thread_from_file(thread_path: str) -> None:
-    """Post a thread from a text file separated by '---' lines."""
+    """Post top-level tweets from a file separated by '---' lines."""
     path = Path(thread_path)
     if not path.exists():
         raise FileNotFoundError(f"Thread file not found: {thread_path}")
     content = path.read_text(encoding="utf-8")
     parts = [p.strip() for p in content.split("\n---\n") if p.strip()]
-    reply_to: Optional[str] = None
     for part in parts:
-        reply_to = post_single(part, in_reply_to_tweet_id=reply_to)
+        post_single(part)
         time.sleep(2)
 
 def post_composed_single(
@@ -121,4 +120,3 @@ def post_composed_single(
 
     alt_text = f"{headline}. {' '.join(bullets[:3])} Source: {source}"
     return post_single(text=text, media_path=out_path, alt_text=alt_text)
-
