@@ -26,6 +26,14 @@ except ImportError:
 
 load_dotenv()
 
+DEFAULT_TWEET_MODEL = os.getenv("OPENAI_TWEET_MODEL", "gpt-5-mini")
+FALLBACK_TWEET_MODELS = [
+    m.strip()
+    for m in os.getenv("OPENAI_TWEET_MODEL_FALLBACKS", "gpt-4o,gpt-4.1-mini")
+    .split(",")
+    if m.strip()
+]
+
 if _use_new_client:
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 else:
