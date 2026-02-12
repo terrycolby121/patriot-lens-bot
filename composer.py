@@ -72,8 +72,13 @@ class TweetConfig:
     # Set via OPENAI_TWEET_MODEL; defaults to gpt-5-mini.
     model: str = DEFAULT_TWEET_MODEL
     temperature: float = 0.7
-    max_tokens: int = 120
+    max_completion_tokens: int = 120
+    max_tokens: Optional[int] = None  # legacy alias
     candidate_count: int = 6
+
+    def __post_init__(self) -> None:
+        if self.max_tokens is not None:
+            self.max_completion_tokens = self.max_tokens
 
 
 # =========================
@@ -324,17 +329,37 @@ def _generate_candidate(messages: List[dict], cfg: TweetConfig) -> str:
     for model_name in models:
         try:
             if _use_new_client:
-                resp = client.chat.completions.create(
-                    model=model_name,
-                    messages=messages,
-                    max_tokens=cfg.max_tokens,
-                    temperature=sampled_temp,
-                )
+                request_kwargs = {
+                    "model": model_name,
+                    "messages": messages,
+                    "temperature": sampled_temp,
+                }
+                try:
+                    resp = client.chat.completions.create(
+                        **request_kwargs,
+                        max_completion_tokens=cfg.max_completion_tokens,
+                    )
+                except TypeError as type_exc:
+                    if "max_completion_tokens" not in str(type_exc):
+                        raise
+                    try:
+                        resp = client.chat.completions.create(
+                            **request_kwargs,
+                            max_tokens=cfg.max_completion_tokens,
+                        )
+                    except Exception as fallback_exc:
+                        fallback_error = str(fallback_exc).lower()
+                        if (
+                            "unsupported parameter" not in fallback_error
+                            or "max_tokens" not in fallback_error
+                        ):
+                            raise
+                        resp = client.chat.completions.create(**request_kwargs)
                 return (resp.choices[0].message.content or "").strip()
             resp = client.ChatCompletion.create(
                 model=model_name,
                 messages=messages,
-                max_tokens=cfg.max_tokens,
+                max_tokens=cfg.max_completion_tokens,
                 temperature=sampled_temp,
             )
             return resp["choices"][0]["message"]["content"].strip()
