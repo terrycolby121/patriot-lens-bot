@@ -23,8 +23,8 @@ except Exception:  # Python <3.2 fallback
 
 from dotenv import load_dotenv
 from news_fetcher import fetch_headlines, print_article
-from composer import TweetConfig
-from src.pipeline_with_image import post_tweet_with_image
+from composer import TweetConfig, craft_tweet
+from src.post_thread import post_single
 
 load_dotenv()
 
@@ -92,7 +92,8 @@ def post_latest_tweets(count: int = 1) -> None:
         summary = choice.get("summary", "") if isinstance(choice, dict) else ""
 
         try:
-            tweet_id = post_tweet_with_image(headline, summary, TweetConfig())
+            text = craft_tweet(headline, summary, config=TweetConfig())
+            tweet_id = post_single(text=text)
             logger.info("Posted tweet ID: %s", tweet_id)
 
             cache.append({

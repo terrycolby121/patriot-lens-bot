@@ -1,26 +1,17 @@
-import os
 import logging
 import random
 from dotenv import load_dotenv
 from composer import craft_tweet
 from news_fetcher import fetch_top_articles
-from src.pipeline_auto_card import post_headline_with_card
 from src.post_thread import post_single
 
 logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-AUTO_CARD = os.getenv("AUTO_CARD_ENABLED", "1") == "1"
-
-
 def post_scheduled_tweet() -> None:
-    """Post a scheduled tweet using either the card pipeline or text-only path."""
-    if AUTO_CARD:
-        logger.info("AUTO_CARD_ENABLED=1; using card pipeline")
-        post_headline_with_card()
-        return
-    logger.info("AUTO_CARD_ENABLED=0; posting text-only headline")
+    """Post a scheduled text-only headline tweet."""
+    logger.info("Posting text-only headline")
     arts = fetch_top_articles(limit=10)
     if not arts:
         logger.warning("No articles fetched; skipping")
