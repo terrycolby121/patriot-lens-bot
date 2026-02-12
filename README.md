@@ -96,3 +96,4 @@ Do **not** automate restricted/read endpoints such as timelines, search, or tren
 ## Accessibility
 
 If you later re-enable media posting, include ALT text for image attachments.
+

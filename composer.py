@@ -69,8 +69,8 @@ class TweetConfig:
     # output safety:
     strip_ai_markers: bool = True
     # LLM parameters:
-    # GPT-5.2-mini balances quality and cost for short-form tweet generation.
-    model: str = "gpt-5.2-mini"
+    # Set via OPENAI_TWEET_MODEL; defaults to gpt-5-mini.
+    model: str = DEFAULT_TWEET_MODEL
     temperature: float = 0.7
     max_tokens: int = 120
     candidate_count: int = 6
@@ -319,21 +319,34 @@ def _build_messages(
 def _generate_candidate(messages: List[dict], cfg: TweetConfig) -> str:
     """Generate one candidate tweet from the active LLM client."""
     sampled_temp = min(1.1, max(0.35, cfg.temperature + random.uniform(-0.18, 0.15)))
-    if _use_new_client:
-        resp = client.chat.completions.create(
-            model=cfg.model,
-            messages=messages,
-            max_tokens=cfg.max_tokens,
-            temperature=sampled_temp,
-        )
-        return (resp.choices[0].message.content or "").strip()
-    resp = client.ChatCompletion.create(
-        model=cfg.model,
-        messages=messages,
-        max_tokens=cfg.max_tokens,
-        temperature=sampled_temp,
-    )
-    return resp["choices"][0]["message"]["content"].strip()
+    models = [cfg.model] + [m for m in FALLBACK_TWEET_MODELS if m != cfg.model]
+    last_error: Optional[Exception] = None
+    for model_name in models:
+        try:
+            if _use_new_client:
+                resp = client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    max_tokens=cfg.max_tokens,
+                    temperature=sampled_temp,
+                )
+                return (resp.choices[0].message.content or "").strip()
+            resp = client.ChatCompletion.create(
+                model=model_name,
+                messages=messages,
+                max_tokens=cfg.max_tokens,
+                temperature=sampled_temp,
+            )
+            return resp["choices"][0]["message"]["content"].strip()
+        except Exception as exc:
+            err_txt = str(exc).lower()
+            if "model_not_found" in err_txt or "does not exist" in err_txt or "access" in err_txt:
+                last_error = exc
+                continue
+            raise
+    raise RuntimeError(
+        f"No accessible tweet model found. Tried: {', '.join(models)}"
+    ) from last_error
 
 
 def _score_candidate(text: str, headline: str, summary: str, cfg: TweetConfig) -> float:
