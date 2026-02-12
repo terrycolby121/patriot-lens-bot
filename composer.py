@@ -72,7 +72,7 @@ class TweetConfig:
     # Set via OPENAI_TWEET_MODEL; defaults to gpt-5-mini.
     model: str = DEFAULT_TWEET_MODEL
     temperature: float = 0.7
-    max_tokens: int = 120
+    max_completion_tokens: int = 120
     candidate_count: int = 6
 
 
@@ -327,14 +327,14 @@ def _generate_candidate(messages: List[dict], cfg: TweetConfig) -> str:
                 resp = client.chat.completions.create(
                     model=model_name,
                     messages=messages,
-                    max_tokens=cfg.max_tokens,
+                    max_completion_tokens=cfg.max_completion_tokens,
                     temperature=sampled_temp,
                 )
                 return (resp.choices[0].message.content or "").strip()
             resp = client.ChatCompletion.create(
                 model=model_name,
                 messages=messages,
-                max_tokens=cfg.max_tokens,
+                max_tokens=cfg.max_completion_tokens,
                 temperature=sampled_temp,
             )
             return resp["choices"][0]["message"]["content"].strip()
