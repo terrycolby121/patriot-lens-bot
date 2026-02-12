@@ -71,7 +71,7 @@ class TweetConfig:
     # LLM parameters:
     # Set via OPENAI_TWEET_MODEL; defaults to gpt-5-mini.
     model: str = DEFAULT_TWEET_MODEL
-    temperature: float = 0.7
+    temperature: float = 1.0
     max_completion_tokens: int = 120
     max_tokens: Optional[int] = None  # legacy alias
     candidate_count: int = 6
@@ -355,13 +355,52 @@ def _generate_candidate(messages: List[dict], cfg: TweetConfig) -> str:
                         ):
                             raise
                         resp = client.chat.completions.create(**request_kwargs)
+                except Exception as temp_or_param_exc:
+                    err = str(temp_or_param_exc).lower()
+                    if "temperature" not in err or (
+                        "unsupported" not in err and "does not support" not in err
+                    ):
+                        raise
+                    request_kwargs.pop("temperature", None)
+                    try:
+                        resp = client.chat.completions.create(
+                            **request_kwargs,
+                            max_completion_tokens=cfg.max_completion_tokens,
+                        )
+                    except TypeError as type_exc:
+                        if "max_completion_tokens" not in str(type_exc):
+                            raise
+                        try:
+                            resp = client.chat.completions.create(
+                                **request_kwargs,
+                                max_tokens=cfg.max_completion_tokens,
+                            )
+                        except Exception as fallback_exc:
+                            fallback_error = str(fallback_exc).lower()
+                            if (
+                                "unsupported parameter" not in fallback_error
+                                or "max_tokens" not in fallback_error
+                            ):
+                                raise
+                            resp = client.chat.completions.create(**request_kwargs)
                 return (resp.choices[0].message.content or "").strip()
-            resp = client.ChatCompletion.create(
-                model=model_name,
-                messages=messages,
-                max_tokens=cfg.max_completion_tokens,
-                temperature=sampled_temp,
-            )
+
+            legacy_kwargs = {
+                "model": model_name,
+                "messages": messages,
+                "max_tokens": cfg.max_completion_tokens,
+                "temperature": sampled_temp,
+            }
+            try:
+                resp = client.ChatCompletion.create(**legacy_kwargs)
+            except Exception as legacy_temp_exc:
+                legacy_err = str(legacy_temp_exc).lower()
+                if "temperature" not in legacy_err or (
+                    "unsupported" not in legacy_err and "does not support" not in legacy_err
+                ):
+                    raise
+                legacy_kwargs.pop("temperature", None)
+                resp = client.ChatCompletion.create(**legacy_kwargs)
             return resp["choices"][0]["message"]["content"].strip()
         except Exception as exc:
             err_txt = str(exc).lower()
