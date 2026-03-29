@@ -1,18 +1,30 @@
+"""Tweet composer for Patriot Lens Bot.
+
+Generates engagement-optimised tweet copy via OpenAI's chat API.
+Supports three formats:
+  - "single"         — one standalone tweet (default)
+  - "question_cta"   — tweet ending with a reply-driving question
+  - "numbered_thread"— use craft_thread_pair() instead of craft_tweet()
+"""
+from __future__ import annotations
+
+import logging
 import os
 import random
 import re
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
+logger = logging.getLogger(__name__)
+
 try:
     from dotenv import load_dotenv
 except ImportError as exc:  # pragma: no cover
     raise RuntimeError(
-        "python-dotenv package is required. Install dependencies from requirements.txt"
+        "python-dotenv is required. Run: pip install -r requirements.txt"
     ) from exc
 
 try:
-    # Prefer the new OpenAI client if available
     from openai import OpenAI
     _use_new_client = True
 except ImportError:
@@ -21,16 +33,15 @@ except ImportError:
         _use_new_client = False
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError(
-            "openai package is required. Install dependencies from requirements.txt"
+            "openai is required. Run: pip install -r requirements.txt"
         ) from exc
 
 load_dotenv()
 
-DEFAULT_TWEET_MODEL = os.getenv("OPENAI_TWEET_MODEL", "gpt-5-mini")
+DEFAULT_TWEET_MODEL = os.getenv("OPENAI_TWEET_MODEL", "gpt-4o-mini")
 FALLBACK_TWEET_MODELS = [
     m.strip()
-    for m in os.getenv("OPENAI_TWEET_MODEL_FALLBACKS", "gpt-4o,gpt-4.1-mini")
-    .split(",")
+    for m in os.getenv("OPENAI_TWEET_MODEL_FALLBACKS", "gpt-4o,gpt-4.1-mini").split(",")
     if m.strip()
 ]
 
@@ -41,39 +52,28 @@ else:
     client = openai
 
 
-# =========================
-# Engagement-Oriented Config
-# =========================
+# ---------------------------------------------------------------------------
+# Configuration dataclass
+# ---------------------------------------------------------------------------
 
 @dataclass
 class TweetConfig:
-    """
-    Engagement-focused configuration for tweet generation.
+    """Engagement-focused configuration for tweet generation."""
 
-    Why this helps engagement:
-    - Lets you vary tone/length to avoid "botty" repetition.
-    - Enables/limits hashtags to keep them sparing and on-brand.
-    - Adds light randomization to boost perceived authenticity.
-    """
-    tone: str = "edgy, plain-spoken, confident"               # high-level vibe
-    max_length: int = 280                                      # API hard limit
-    max_hashtags: int = 1                                      # 'sparingly' by default
+    tone: str = "edgy, plain-spoken, confident"
+    max_length: int = 280
+    max_hashtags: int = 2          # 1-2 at the END; never mid-tweet
     allow_hashtags: bool = True
-    use_questions_ratio: float = 0.35                          # curiosity + replies
-    use_cta_ratio: float = 0.20                                # retweets/replies/follows
-    include_emojis: bool = False                               # use sparingly; off by default
-    trending_keywords: List[str] = field(default_factory=list) # inject from your scheduler if you fetch trends elsewhere
+    use_questions_ratio: float = 0.35
+    use_cta_ratio: float = 0.20
+    include_emojis: bool = False
+    trending_keywords: List[str] = field(default_factory=list)
     brand_hashtags: List[str] = field(default_factory=lambda: ["#AmericaFirst"])
-    # protect against spammy patterns:
-    dedupe_window_keywords: int = 5                            # limit repeated topical tags across recent tweets (handled upstream if you store history)
-    # output safety:
     strip_ai_markers: bool = True
-    # LLM parameters:
-    # Set via OPENAI_TWEET_MODEL; defaults to gpt-5-mini.
     model: str = DEFAULT_TWEET_MODEL
     temperature: float = 1.0
-    max_completion_tokens: int = 120
-    max_tokens: Optional[int] = None  # legacy alias
+    max_completion_tokens: int = 200
+    max_tokens: Optional[int] = None   # legacy alias
     candidate_count: int = 6
 
     def __post_init__(self) -> None:
@@ -81,66 +81,83 @@ class TweetConfig:
             self.max_completion_tokens = self.max_tokens
 
 
-# =========================
-# Brand Voice & Prompting
-# =========================
+# ---------------------------------------------------------------------------
+# System prompt
+# ---------------------------------------------------------------------------
 
-# A sharpened but platform-safe system prompt that preserves your theme
-# while optimizing for reach & authenticity (concise, readable, non-spammy).
 SYSTEM_PROMPT = (
-    "You are Patriot Lens—an edgy, sharp-tongued conservative commentator on Twitter "
-    "who values rugged individualism, limited government, and America First priorities.\n\n"
-    "Objectives:\n"
-    "• Create concise, scannable tweets that maximize engagement (likes/replies/retweets/follows).\n"
-    "• Preserve voice: bold, witty, pointed; no vulgarity; avoid clichés; avoid unsubstantiated conspiracy claims.\n"
-    "• Use hooks, relatable phrasing, curiosity gaps, and—sparingly—hashtags.\n"
-    "• Vary forms: headlines, insights, questions, conversation starters.\n"
-    "• Keep under 280 chars; clear, readable; no walls of text.\n"
+    "You are Patriot Lens, a bold conservative commentator on Twitter/X.\n\n"
+    "HARD RULES — follow every one:\n"
+    "1. Use active voice and strong verbs. Eliminate all passive constructions.\n"
+    "2. Never use em-dashes (—). Use a comma or period instead.\n"
+    "3. Never open with filler phrases: 'Let's be clear', 'Make no mistake', "
+    "'At the end of the day', 'Look,', 'Folks,', 'Here's the thing'.\n"
+    "4. No hashtags inside the tweet body. Hashtags belong at the very end only.\n"
+    "5. No vulgarity. No unsubstantiated conspiracy claims.\n"
+    "6. Stay under 260 characters (hashtags are appended separately).\n"
+    "7. Output ONLY the tweet text. No quotes around it, no labels, no explanation.\n\n"
+    "STYLE:\n"
+    "- Drop in one concrete fact or number when available.\n"
+    "- Mix short punchy sentences with one medium one.\n"
+    "- Be witty and pointed, not angry or ranty.\n"
+    "- You value America First priorities, limited government, and rugged individualism.\n"
 )
 
-# Lightweight, reusable fragments that prompt the model to produce
-# specific engagement-forward structures while keeping variety.
-HOOKS = [
-    "Quick hit",
-    "Hard truth",
-    "Worth asking",
-    "Let’s be honest",
-    "Numbers don’t lie",
-    "Reality check",
-    "Here’s the tell",
-    "Watch this trend",
-]
+THREAD_SYSTEM_PROMPT = (
+    SYSTEM_PROMPT
+    + "\nYou are writing one tweet in a 2-tweet thread. "
+    "Each tweet must stand alone and be under 280 characters.\n"
+)
 
-STYLE_ANGLES = [
+
+# ---------------------------------------------------------------------------
+# Format-specific instructions
+# ---------------------------------------------------------------------------
+
+_FORMAT_STYLES = {
+    "bold_statement": (
+        "Write a single bold declarative statement. Lead with the strongest "
+        "claim. Use present tense where possible."
+    ),
+    "breaking": (
+        "Start the tweet with 'BREAKING:' then give a tight, urgent summary "
+        "of what happened and why it matters. Maximum urgency, minimum words."
+    ),
+    "rhetorical_question": (
+        "Open with a short rhetorical question that reframes the headline from "
+        "a skeptical angle, then give a one-sentence implication or answer."
+    ),
+    "question_cta": (
+        "Make a bold observation about the story. End with a direct question "
+        "to drive replies, such as 'Agree or disagree?' or 'What do you think?'. "
+        "Do NOT end with a period after the question mark."
+    ),
+}
+
+_URGENCY_WORDS = frozenset(
+    {"breaking", "just in", "confirmed", "alert", "massive", "unprecedented"}
+)
+
+_STYLE_ANGLES = [
     "Lead with a punchy comparison and one concrete detail.",
     "Lead with a trend observation and a skeptical takeaway.",
     "Lead with a contradiction and one sentence of context.",
     "Lead with a plain-language consequence for everyday Americans.",
-    "Lead with a data point framing and an opinionated conclusion.",
+    "Lead with a data point and an opinionated conclusion.",
     "Lead with a short challenge statement and one-line rationale.",
 ]
 
-CTAS = [
-    "Agree?",
-    "Thoughts?",
-    "Save this for later.",
-    "Send this to a friend who should see it.",
-    "If this tracks, say why.",
-    "Bookmark this for the next debate.",
-]
-
-QUESTION_OPENERS = [
-    "Be honest—",
-    "Serious question—",
-    "If this is 'normal,' why—",
-    "What are we missing—",
-    "So riddle me this—",
+_QUESTION_CTAS = [
+    "Agree or disagree?",
+    "What do you think?",
+    "Sound off below.",
+    "Change my mind.",
 ]
 
 
-# =========================
-# Hashtag & Keyword Mapping
-# =========================
+# ---------------------------------------------------------------------------
+# Hashtag mapping
+# ---------------------------------------------------------------------------
 
 TOPICAL_KEYWORDS = {
     "border": "#BorderSecurity",
@@ -180,87 +197,76 @@ TOPICAL_KEYWORDS = {
 GENERIC_NEWS_TAG = "#News"
 
 
-def _infer_topical_tags(text: str, limit: int, seed_tags: List[str]) -> List[str]:
-    """
-    Find relevant topical tags from headline/summary; backfill with brand/trending.
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
 
-    Engagement rationale:
-    - Keeps hashtags highly relevant and minimal (sparingly).
-    - Allows you to inject current trends from your scheduler ingestion.
-    """
+def _has_urgency(headline: str) -> bool:
+    lc = headline.lower()
+    return any(w in lc for w in _URGENCY_WORDS)
+
+
+def _choose_format_style(headline: str, tweet_format: str) -> str:
+    """Pick a format style string based on requested format and headline content."""
+    if tweet_format == "question_cta":
+        return "question_cta"
+    if _has_urgency(headline):
+        return "breaking"
+    # Weight bold_statement 2:1 over rhetorical_question for variety
+    return random.choice(["bold_statement", "bold_statement", "rhetorical_question"])
+
+
+def _infer_topical_tags(text: str, limit: int, seed_tags: List[str]) -> List[str]:
     text_lc = (text or "").lower()
-    tags = []
+    tags: List[str] = []
     for kw, tag in TOPICAL_KEYWORDS.items():
         if kw in text_lc and tag not in tags:
             tags.append(tag)
-
-    # backfill with trending/brand tags (non-duplicates)
     for t in seed_tags:
         if t not in tags:
             tags.append(t)
-
     if not tags:
         tags = [GENERIC_NEWS_TAG]
-
-    return tags[:max(0, limit)]
+    return tags[: max(0, limit)]
 
 
 def _sanitize(text: str) -> str:
-    """
-    Remove common AI disclaimers and normalize punctuation.
-    """
-    text = text.replace("—", "-")
+    """Strip AI disclaimers, em-dashes, and normalize whitespace."""
+    # Replace em-dashes with comma+space or period based on context
+    text = re.sub(r"\s*—\s*", ", ", text)
+    # Strip AI self-references
     if re.search(r"(?i)\bas an ai\b|\bi am an ai\b|\bas a language model\b", text):
         text = re.sub(r"(?i)as an ai[^.?!]*[.?!]?\s*", "", text)
         text = re.sub(r"(?i)i(?: am|'m) an ai[^.?!]*[.?!]?\s*", "", text)
         text = re.sub(r"(?i)as a language model[^.?!]*[.?!]?\s*", "", text)
-    # collapse excessive punctuation / spaces
     text = re.sub(r"\s+", " ", text).strip()
-    text = re.sub(r"([!?])\1{2,}", r"\1\1", text)   # no !!! spam
-    text = re.sub(r"#([A-Za-z0-9_]{1,50})(?:\s*#\1)+", r"#\1", text)  # de-dupe repeated tag words
+    text = re.sub(r"([!?])\1{2,}", r"\1\1", text)
+    text = re.sub(r"#([A-Za-z0-9_]{1,50})(?:\s*#\1)+", r"#\1", text)
     return text
 
 
-def _maybe_add_question(text: str, ratio: float) -> str:
-    """
-    Occasionally end with a short question to prompt replies.
-
-    Engagement rationale:
-    - Questions invite responses & boosts reply metrics.
-    """
-    if random.random() < ratio and not text.rstrip().endswith("?"):
-        q = random.choice(QUESTION_OPENERS)
-        # Ensure we stay concise:
-        if len(text) + len(" " + q + " ?") <= 260:  # leave room for a tag
-            return f"{text} {q}?"
-    return text
-
-
-def _maybe_add_cta(text: str, ratio: float) -> str:
-    """
-    Occasionally add a brief CTA.
-
-    Engagement rationale:
-    - CTAs nudge users to reply/bookmark/share without sounding spammy.
-    """
-    if random.random() < ratio:
-        cta = random.choice(CTAS)
-        if len(text) + len(" " + cta) <= 260:
-            return f"{text} {cta}"
-    return text
+def _ensure_question_cta(text: str) -> str:
+    """Guarantee the text ends with a reply-driving question if it doesn't already."""
+    text = text.rstrip()
+    if text.endswith("?"):
+        return text
+    cta = random.choice(_QUESTION_CTAS)
+    budget = 260 - len(" " + cta)
+    if len(text) <= budget:
+        return f"{text} {cta}"
+    # Trim body to fit
+    trimmed = text[:budget].rsplit(" ", 1)[0]
+    return f"{trimmed} {cta}"
 
 
 def _emoji_guard(text: str, allow: bool) -> str:
-    """
-    Allow or remove emojis based on config to keep style consistent.
-    """
     if allow:
         return text
-    return re.sub(r"[^\w\s.,:;/?@#'\-\(\)%!]", "", text)  # strip non-basic emoji/symbols
+    return re.sub(r"[^\w\s.,:;/?@#'\-\(\)%!]", "", text)
 
 
 def _trim_to_length(base: str, tags: List[str], max_len: int, url: str = "") -> str:
-    """Compose final tweet under ``max_len`` without cutting URL/hashtags mid-token."""
+    """Compose final tweet under max_len without cutting URL/hashtags."""
     suffix_parts: List[str] = []
     if url:
         suffix_parts.append(url.strip())
@@ -269,161 +275,176 @@ def _trim_to_length(base: str, tags: List[str], max_len: int, url: str = "") -> 
 
     suffix = ""
     if suffix_parts:
-        suffix = " " + " ".join([p for p in suffix_parts if p])
+        suffix = " " + " ".join(p for p in suffix_parts if p)
 
     avail = max_len - len(suffix)
     if avail < 0:
-        # Keep only as many suffix tokens as fit; prioritize URL first then hashtags.
         kept: List[str] = []
         for token in suffix_parts:
-            candidate = (" ".join(kept + [token])).strip()
+            candidate = " ".join(kept + [token])
             if len(candidate) <= max_len:
                 kept.append(token)
         suffix = (" " + " ".join(kept)) if kept else ""
         avail = max_len - len(suffix)
 
-    trimmed_base = base[:max(0, avail)].rstrip()
-    final = f"{trimmed_base}{suffix}".strip()
-    return final[:max_len]
+    trimmed_base = base[: max(0, avail)].rstrip()
+    return f"{trimmed_base}{suffix}".strip()[:max_len]
 
 
 def _build_messages(
     headline: str,
     summary: str,
     cfg: TweetConfig,
-    style_nudge: str,
-    hook: str,
+    format_style: str,
 ) -> List[dict]:
-    """
-    Builds the LLM messages with light structure cues for variety.
+    """Build LLM messages for a single tweet."""
+    format_instruction = _FORMAT_STYLES.get(format_style, _FORMAT_STYLES["bold_statement"])
+    style_nudge = random.choice(_STYLE_ANGLES)
 
-    Engagement rationale:
-    - Hooks + concise structure improves scannability.
-    - Explicit variety signals reduce repetitive outputs.
-    """
     user_prompt = (
-        f"Headline: \"{headline}\"\n"
-        f"Summary: \"{summary or ''}\"\n\n"
-        f"Constraints:\n"
-        f"- Start with a brief hook like \"{hook}:\" (no quotes).\n"
-        f"- Tone: {cfg.tone}.\n"
-        f"- Keep it under {cfg.max_length} chars; highly readable.\n"
-        f"- Avoid clichés and walls of text; no vulgarity.\n"
-        f"- Use relatable phrasing; one crisp detail if possible.\n"
-        f"- {style_nudge}\n"
-        f"- Vary sentence lengths. 1-2 short, 1 medium.\n"
-        f"- Output a single tweet only.\n"
+        f'Headline: "{headline}"\n'
+        f'Summary: "{summary or ""}"\n\n'
+        f"Format instruction: {format_instruction}\n"
+        f"Additional style nudge: {style_nudge}\n\n"
+        f"Tone: {cfg.tone}.\n"
+        f"Max length: 260 characters (no hashtags in body).\n"
+        f"Output ONLY the tweet text.\n"
     )
-
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": user_prompt},
     ]
 
 
+def _build_thread_messages(
+    headline: str,
+    summary: str,
+    cfg: TweetConfig,
+    tweet_num: int,
+    hook_text: str = "",
+) -> List[dict]:
+    """Build LLM messages for one tweet in a 2-tweet thread."""
+    if tweet_num == 1:
+        instruction = (
+            "Write tweet 1 of 2. This is the HOOK: a punchy, provocative opener that "
+            "makes readers want to see tweet 2. Strong claim or rhetorical question. "
+            "Under 260 characters. No hashtags."
+        )
+        context = f'Headline: "{headline}"\nSummary: "{summary or ""}"\n'
+    else:
+        instruction = (
+            "Write tweet 2 of 2. This is the CONTEXT: give 3-4 tight sentences of "
+            "background and implication. Reference the hook tweet below. "
+            "Under 270 characters. No hashtags."
+        )
+        context = (
+            f'Headline: "{headline}"\n'
+            f'Summary: "{summary or ""}"\n'
+            f'Hook tweet (tweet 1): "{hook_text}"\n'
+        )
+
+    user_prompt = (
+        f"{context}\n"
+        f"Instruction: {instruction}\n"
+        f"Tone: {cfg.tone}.\n"
+        f"Output ONLY the tweet text.\n"
+    )
+    return [
+        {"role": "system", "content": THREAD_SYSTEM_PROMPT},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+# ---------------------------------------------------------------------------
+# LLM call with model fallback
+# ---------------------------------------------------------------------------
+
 def _supports_custom_temperature(model_name: str) -> bool:
-    """GPT-5 chat models currently only support default temperature behavior."""
     return not model_name.lower().startswith("gpt-5")
 
 
-
 def _generate_candidate(messages: List[dict], cfg: TweetConfig) -> str:
-    """Generate one candidate tweet from the active LLM client."""
+    """Generate one candidate tweet; tries model list in priority order."""
     models = [cfg.model] + [m for m in FALLBACK_TWEET_MODELS if m != cfg.model]
     last_error: Optional[Exception] = None
+
     for model_name in models:
         sampled_temp = min(1.1, max(0.35, cfg.temperature + random.uniform(-0.18, 0.15)))
-        allow_custom_temp = _supports_custom_temperature(model_name)
+        allow_temp = _supports_custom_temperature(model_name)
         try:
             if _use_new_client:
-                request_kwargs = {
-                    "model": model_name,
-                    "messages": messages,
-                }
-                if allow_custom_temp:
-                    request_kwargs["temperature"] = sampled_temp
+                kwargs: dict = {"model": model_name, "messages": messages}
+                if allow_temp:
+                    kwargs["temperature"] = sampled_temp
                 try:
                     resp = client.chat.completions.create(
-                        **request_kwargs,
-                        max_completion_tokens=cfg.max_completion_tokens,
+                        **kwargs, max_completion_tokens=cfg.max_completion_tokens
                     )
-                except TypeError as type_exc:
-                    if "max_completion_tokens" not in str(type_exc):
+                except TypeError as te:
+                    if "max_completion_tokens" not in str(te):
                         raise
+                    resp = client.chat.completions.create(
+                        **kwargs, max_tokens=cfg.max_completion_tokens
+                    )
+                except Exception as e:
+                    if "temperature" not in str(e).lower():
+                        raise
+                    kwargs.pop("temperature", None)
                     try:
                         resp = client.chat.completions.create(
-                            **request_kwargs,
-                            max_tokens=cfg.max_completion_tokens,
+                            **kwargs, max_completion_tokens=cfg.max_completion_tokens
                         )
-                    except Exception as fallback_exc:
-                        fallback_error = str(fallback_exc).lower()
-                        if (
-                            "unsupported parameter" not in fallback_error
-                            or "max_tokens" not in fallback_error
-                        ):
-                            raise
-                        resp = client.chat.completions.create(**request_kwargs)
-                except Exception as temp_or_param_exc:
-                    err = str(temp_or_param_exc).lower()
-                    if "temperature" not in err or (
-                        "unsupported" not in err and "does not support" not in err
-                    ):
-                        raise
-                    request_kwargs.pop("temperature", None)
-                    try:
+                    except TypeError:
                         resp = client.chat.completions.create(
-                            **request_kwargs,
-                            max_completion_tokens=cfg.max_completion_tokens,
+                            **kwargs, max_tokens=cfg.max_completion_tokens
                         )
-                    except TypeError as type_exc:
-                        if "max_completion_tokens" not in str(type_exc):
-                            raise
-                        try:
-                            resp = client.chat.completions.create(
-                                **request_kwargs,
-                                max_tokens=cfg.max_completion_tokens,
-                            )
-                        except Exception as fallback_exc:
-                            fallback_error = str(fallback_exc).lower()
-                            if (
-                                "unsupported parameter" not in fallback_error
-                                or "max_tokens" not in fallback_error
-                            ):
-                                raise
-                            resp = client.chat.completions.create(**request_kwargs)
-                return (resp.choices[0].message.content or "").strip()
+                content = (resp.choices[0].message.content or "").strip()
+                if not content:
+                    refusal = getattr(resp.choices[0].message, "refusal", None)
+                    logger.warning(
+                        "Model %s returned empty content%s; trying fallback",
+                        model_name,
+                        f" (refusal: {refusal[:80]})" if refusal else "",
+                    )
+                    last_error = ValueError(f"{model_name} returned empty content")
+                    continue
+                return content
 
-            legacy_kwargs = {
+            # Legacy client path
+            lkw: dict = {
                 "model": model_name,
                 "messages": messages,
                 "max_tokens": cfg.max_completion_tokens,
             }
-            if allow_custom_temp:
-                legacy_kwargs["temperature"] = sampled_temp
+            if allow_temp:
+                lkw["temperature"] = sampled_temp
             try:
-                resp = client.ChatCompletion.create(**legacy_kwargs)
-            except Exception as legacy_temp_exc:
-                legacy_err = str(legacy_temp_exc).lower()
-                if "temperature" not in legacy_err or (
-                    "unsupported" not in legacy_err and "does not support" not in legacy_err
-                ):
+                resp = client.ChatCompletion.create(**lkw)
+            except Exception as e:
+                if "temperature" not in str(e).lower():
                     raise
-                legacy_kwargs.pop("temperature", None)
-                resp = client.ChatCompletion.create(**legacy_kwargs)
+                lkw.pop("temperature", None)
+                resp = client.ChatCompletion.create(**lkw)
             return resp["choices"][0]["message"]["content"].strip()
+
         except Exception as exc:
-            err_txt = str(exc).lower()
-            if "model_not_found" in err_txt or "does not exist" in err_txt or "access" in err_txt:
+            err = str(exc).lower()
+            if "model_not_found" in err or "does not exist" in err or "access" in err:
                 last_error = exc
                 continue
             raise
+
     raise RuntimeError(
-        f"No accessible tweet model found. Tried: {', '.join(models)}"
+        f"No accessible tweet model. Tried: {', '.join(models)}"
     ) from last_error
 
 
+# ---------------------------------------------------------------------------
+# Candidate scoring
+# ---------------------------------------------------------------------------
+
 def _score_candidate(text: str, headline: str, summary: str, cfg: TweetConfig) -> float:
-    """Heuristic scoring to prefer specific, varied, readable tweet candidates."""
+    """Heuristic scoring to prefer specific, varied, readable candidates."""
     score = 0.0
     words = re.findall(r"[A-Za-z0-9']+", text.lower())
     unique_ratio = (len(set(words)) / len(words)) if words else 0.0
@@ -441,93 +462,219 @@ def _score_candidate(text: str, headline: str, summary: str, cfg: TweetConfig) -
         score += 0.25
     if re.search(r"\b(why|how|what|when)\b", text.lower()):
         score += 0.2
-    if re.search(r"\b(think|feel|notice|watch|look)\b", text.lower()):
-        score += 0.15
 
     source = f"{headline} {summary}".lower()
     overlap = sum(1 for w in set(words) if len(w) > 4 and w in source)
     score += min(2.0, overlap * 0.2)
 
-    stale_openers = ("quick hit:", "hard truth:", "reality check:")
-    if text.lower().startswith(stale_openers):
-        score -= 0.3
-
     if re.search(r"([!?])\1{2,}", text):
         score -= 0.4
 
+    # Penalise banned filler openers
+    lc = text.lower()
+    for filler in ("let's be clear", "make no mistake", "at the end of the day", "look,"):
+        if lc.startswith(filler):
+            score -= 1.5
+
     return score
 
+
+# ---------------------------------------------------------------------------
+# Combined cleaning helper
+# ---------------------------------------------------------------------------
+
+def _clean_llm_output(text: str, allow_emojis: bool) -> str:
+    """Sanitize and strip LLM formatting artifacts in one pass.
+
+    Handles:
+    - Wrapper double-quotes the model sometimes adds around the tweet
+    - Markdown code fences (``` ... ```)
+    - Leading labels like "Tweet:" or "Here is the tweet:"
+    - em-dashes, AI disclaimers, excess punctuation
+    - Emoji (when allow_emojis=False) — but preserves the text body
+    """
+    if not text:
+        return ""
+
+    # Strip markdown code fences
+    text = re.sub(r"^```[^\n]*\n?", "", text.strip())
+    text = re.sub(r"\n?```$", "", text.strip())
+
+    # Strip common LLM preamble labels
+    text = re.sub(
+        r"(?i)^(tweet\s*:?|here(?:'s| is)(?: the| your)?\s*tweet\s*:?)\s*",
+        "",
+        text.strip(),
+    )
+
+    # Strip surrounding double-quotes the model adds (both straight and curly)
+    text = re.sub(r'^["\u201c](.*)["\u201d]$', r"\1", text.strip(), flags=re.DOTALL)
+
+    # Standard sanitization (em-dashes, AI disclaimers, whitespace)
+    text = _sanitize(text)
+
+    # Emoji guard — only strip non-standard chars, NOT alphanumerics or punctuation
+    if not allow_emojis:
+        # More permissive than before: keep curly quotes as straight equivalents
+        text = text.replace("\u2018", "'").replace("\u2019", "'")
+        text = text.replace("\u201c", '"').replace("\u201d", '"')
+        # Now strip true non-text characters (emoji, symbols) but keep punctuation
+        text = re.sub(r"[^\w\s.,:;!?@#'\"\-\(\)%&]", "", text)
+
+    # Strip hashtags from the body — we append our own curated tags at the end
+    text = re.sub(r"\s*#\w+", "", text).strip()
+
+    return text.strip()
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
 def craft_tweet(
     headline: str,
     summary: str = "",
     url: str = "",
-    config: Optional[TweetConfig] = None
+    config: Optional[TweetConfig] = None,
+    tweet_format: str = "single",
 ) -> str:
-    """
-    Create an on-brand, engagement-optimized tweet for the provided topic.
+    """Craft an on-brand, engagement-optimised tweet.
 
-    Engagement-supporting behavior:
-    - Hooks/questions/CTAs added stochastically to prompt conversation.
-    - Hashtags kept minimal & relevant to avoid spammy feel.
-    - Strict 280-char enforcement with clean text sanitation.
+    Args:
+        headline:     News headline to riff on.
+        summary:      Optional article description for additional context.
+        url:          Optional URL appended after hashtags (counts toward length).
+        config:       TweetConfig instance; uses defaults if None.
+        tweet_format: "single" | "question_cta".  For "numbered_thread" use
+                      :func:`craft_thread_pair` instead.
+
+    Returns:
+        Ready-to-post tweet string <= 280 characters.
     """
     cfg = config or TweetConfig()
+    format_style = _choose_format_style(headline, tweet_format)
 
     candidate_count = max(1, cfg.candidate_count)
     candidates: List[Tuple[float, str]] = []
+
     for _ in range(candidate_count):
-        messages = _build_messages(
-            headline=headline,
-            summary=summary,
-            cfg=cfg,
-            style_nudge=random.choice(STYLE_ANGLES),
-            hook=random.choice(HOOKS),
-        )
-        raw_text = _generate_candidate(messages, cfg)
-        cleaned = _emoji_guard(_sanitize(raw_text), cfg.include_emojis)
+        messages = _build_messages(headline, summary, cfg, format_style)
+        raw = _generate_candidate(messages, cfg)
+        logger.debug("LLM raw output: %r", raw)
+        cleaned = _clean_llm_output(raw, cfg.include_emojis)
+
+        if tweet_format == "question_cta":
+            cleaned = _ensure_question_cta(cleaned)
+
         scored = _score_candidate(cleaned, headline, summary, cfg)
         candidates.append((scored, cleaned))
 
     candidates.sort(key=lambda c: c[0], reverse=True)
     text = candidates[0][1]
 
-    # Post-process for platform polish & engagement:
-    text = _maybe_add_question(text, cfg.use_questions_ratio)
-    text = _maybe_add_cta(text, cfg.use_cta_ratio)
-    text = _sanitize(text)
-    text = _emoji_guard(text, cfg.include_emojis)
+    text = _clean_llm_output(text, cfg.include_emojis)
 
-    # Hashtags (sparingly) — combine topical + scheduler-provided trending + brand
+    # Last-resort fallback: never send a blank tweet
+    if not text:
+        logger.warning("craft_tweet produced empty text after cleaning; falling back to headline")
+        text = _sanitize(headline[:260])
+
+    # Hashtags: inferred from content + brand, placed at end
     tags: List[str] = []
     if cfg.allow_hashtags and cfg.max_hashtags > 0:
         seed = list(dict.fromkeys(cfg.trending_keywords + cfg.brand_hashtags))
         topical = _infer_topical_tags(
-            text=(headline or "") + " " + (summary or ""),
+            text=f"{headline} {summary}",
             limit=cfg.max_hashtags,
-            seed_tags=seed
+            seed_tags=seed,
         )
-        # De-duplicate and keep order
-        tags = list(dict.fromkeys([t for t in topical if t.startswith("#")][:cfg.max_hashtags]))
+        tags = list(dict.fromkeys(t for t in topical if t.startswith("#")))[: cfg.max_hashtags]
 
-    # Final length guard with tags appended:
-    final_tweet = _trim_to_length(text, tags, cfg.max_length, url=url)
-    return final_tweet
+    return _trim_to_length(text, tags, cfg.max_length, url=url)
 
 
-# ==============
-# Quick Smoke Test
-# ==============
+def craft_thread_pair(
+    headline: str,
+    summary: str = "",
+    url: str = "",
+    config: Optional[TweetConfig] = None,
+) -> Tuple[str, str]:
+    """Craft a 2-tweet thread: (hook_tweet, context_tweet).
+
+    Tweet 1 (hook):    punchy opener, < 260 chars.
+    Tweet 2 (context): 3-4 sentences of background, <= 280 chars.
+    Used exclusively for the 9 PM numbered_thread slot.
+    """
+    cfg = config or TweetConfig()
+
+    # Tweet 1: hook (try multiple candidates, pick highest scored)
+    hook_candidates: List[Tuple[float, str]] = []
+    for _ in range(max(1, cfg.candidate_count // 2)):
+        msgs = _build_thread_messages(headline, summary, cfg, tweet_num=1)
+        raw = _generate_candidate(msgs, cfg)
+        cleaned = _emoji_guard(_sanitize(raw), cfg.include_emojis)[:260]
+        hook_candidates.append((_score_candidate(cleaned, headline, summary, cfg), cleaned))
+
+    hook_candidates.sort(key=lambda c: c[0], reverse=True)
+    hook = hook_candidates[0][1]
+
+    # Tweet 2: context, referencing the chosen hook
+    context_candidates: List[Tuple[float, str]] = []
+    for _ in range(max(1, cfg.candidate_count // 2)):
+        msgs = _build_thread_messages(headline, summary, cfg, tweet_num=2, hook_text=hook)
+        raw = _generate_candidate(msgs, cfg)
+        cleaned = _emoji_guard(_sanitize(raw), cfg.include_emojis)[:280]
+        context_candidates.append((_score_candidate(cleaned, headline, summary, cfg), cleaned))
+
+    context_candidates.sort(key=lambda c: c[0], reverse=True)
+    context = context_candidates[0][1]
+
+    # Append hashtags to the context tweet (tweet 2 carries the tags)
+    tags: List[str] = []
+    if cfg.allow_hashtags and cfg.max_hashtags > 0:
+        seed = list(dict.fromkeys(cfg.trending_keywords + cfg.brand_hashtags))
+        topical = _infer_topical_tags(
+            text=f"{headline} {summary}",
+            limit=cfg.max_hashtags,
+            seed_tags=seed,
+        )
+        tags = list(dict.fromkeys(t for t in topical if t.startswith("#")))[: cfg.max_hashtags]
+
+    context = _trim_to_length(context, tags, 280, url=url)
+    return (hook, context)
+
+
+# ---------------------------------------------------------------------------
+# Smoke test
+# ---------------------------------------------------------------------------
+
 if __name__ == "__main__":
-    sample_cfg = TweetConfig(
-        max_hashtags=1,
-        allow_hashtags=True,
-        trending_keywords=["#Economy"],  # e.g., injected by your scheduler layer
-        include_emojis=False,
+    import logging
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    cfg = TweetConfig(max_hashtags=2, allow_hashtags=True, include_emojis=False)
+
+    print("=== single ===")
+    print(craft_tweet(
+        "Senate approves $1.5T spending bill with zero border security measures",
+        "Massive government spending bill passes with no border protections attached.",
+        config=cfg,
+        tweet_format="single",
+    ))
+
+    print("\n=== question_cta ===")
+    print(craft_tweet(
+        "BREAKING: DOJ drops charges against former officials",
+        "Department of Justice announces it will not pursue charges.",
+        config=cfg,
+        tweet_format="question_cta",
+    ))
+
+    print("\n=== numbered_thread ===")
+    t1, t2 = craft_thread_pair(
+        "Confirmed: Fed raises rates for the fifth time this year",
+        "Federal Reserve votes 7-2 to raise interest rates another 25 basis points.",
+        config=cfg,
     )
-    sample = craft_tweet(
-        "Senate approves a $1.5T spending bill with no border security",
-        "Massive government spending continues with zero commitment to border protections.",
-        config=sample_cfg
-    )
-    print("🔹 Sample tweet:\n", sample)
+    print(f"Tweet 1: {t1}")
+    print(f"Tweet 2: {t2}")
