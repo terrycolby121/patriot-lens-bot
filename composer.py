@@ -38,7 +38,7 @@ except ImportError:
 
 load_dotenv()
 
-DEFAULT_TWEET_MODEL = os.getenv("OPENAI_TWEET_MODEL", "gpt-4o-mini")
+DEFAULT_TWEET_MODEL = os.getenv("OPENAI_TWEET_MODEL", "gpt-4.1-mini")
 FALLBACK_TWEET_MODELS = [
     m.strip()
     for m in os.getenv("OPENAI_TWEET_MODEL_FALLBACKS", "gpt-4o,gpt-4.1-mini").split(",")
