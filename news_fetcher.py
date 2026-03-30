@@ -25,8 +25,15 @@ def fetch_top_articles(
     limit: int = 1,
     country: str = "us",
     category: str = "politics",
+    q: str | None = None,
 ) -> list[dict]:
     """Return a list of top articles with title, url, summary, source, and published_at.
+
+    Args:
+        limit:    Max number of articles to return.
+        country:  ISO country code for top-headlines (default "us").
+        category: NewsAPI category (default "politics").
+        q:        Optional keyword query to narrow results (e.g. "border crisis").
 
     The result is capped at *limit* entries. Returns an empty list when
     NEWS_API_KEY is absent or the request fails.
@@ -42,6 +49,8 @@ def fetch_top_articles(
         "pageSize": max(1, limit),
         "from": (datetime.now() - timedelta(hours=2)).isoformat(),
     }
+    if q:
+        params["q"] = q
 
     safe_params = {k: ("***" if k == "apiKey" else v) for k, v in params.items()}
     logger.info("Fetching from %s  params=%s", BASE_URL, safe_params)

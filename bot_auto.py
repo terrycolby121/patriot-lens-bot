@@ -1,12 +1,13 @@
 """Automated headline-tweet pipeline.
 
 Called by scheduler.py for every time-slot post.  Each call:
-  1. Fetches the latest political headlines from NewsAPI.
-  2. Scores and deduplicates them.
-  3. Picks the best article from a top-3 pool.
-  4. Crafts copy in the requested format.
-  5. Posts via the retry-wrapped Twitter client.
-  6. Records the posted URL to prevent repeat posting.
+  1. Checks budget (daily / monthly hard caps).
+  2. Decides content type via content_router (hot_take, question_poll, thread, engagement_bait).
+  3. Picks a hook pattern (anti-repeat).
+  4. Fetches + filters + scores the latest political headlines.
+  5. Crafts copy and posts via the retry-wrapped Twitter client.
+  6. Logs to SQLite analytics and saves daily checklist.
+  7. Records the posted URL to prevent repeat posting.
 
 Zero Twitter read endpoints are used.  Only POST /2/tweets.
 """
@@ -16,6 +17,7 @@ import logging
 import os
 import random
 import re
+import uuid
 from datetime import datetime, timezone
 
 from dotenv import load_dotenv
@@ -25,8 +27,12 @@ from src.log_setup import setup_logging
 setup_logging()
 load_dotenv()
 
-from composer import TweetConfig, craft_tweet, craft_thread_pair   # noqa: E402
+from composer import TweetConfig, craft_tweet, craft_full_thread   # noqa: E402
 from news_fetcher import fetch_top_articles                        # noqa: E402
+from src.analytics import log_post, get_daily_count, get_monthly_count, save_daily_checklist  # noqa: E402
+from src.budget_tracker import can_post, remaining_today           # noqa: E402
+from src.content_router import decide_content_type                 # noqa: E402
+from src.hooks import get_last_hook_pattern, pick_hook_pattern     # noqa: E402
 from src.post_thread import post_single_with_retry                 # noqa: E402
 from src.post_tracker import was_posted, mark_posted               # noqa: E402
 
@@ -131,24 +137,13 @@ def _score_article(article: dict) -> float:
 # Main pipeline
 # ---------------------------------------------------------------------------
 
-def post_scheduled_tweet(tweet_format: str = "single") -> None:
-    """Fetch, score, compose, and post one tweet in the given format.
-
-    Args:
-        tweet_format: "single" | "question_cta" | "numbered_thread"
-    """
-    dry_run = os.getenv("DRY_RUN") == "1"
-    logger.info(
-        "Starting scheduled post",
-        extra={"format_type": tweet_format, "dry_run": dry_run},
-    )
-
-    arts = fetch_top_articles(limit=10)
+def _pick_article(limit: int = 10) -> dict | None:
+    """Fetch, filter, score, and return the best unseen article, or None."""
+    arts = fetch_top_articles(limit=limit)
     if not arts:
-        logger.warning("No articles fetched; skipping this slot")
-        return
+        logger.warning("No articles fetched")
+        return None
 
-    # Score and filter
     ranked: list[tuple[float, dict]] = []
     for article in arts:
         title = article.get("title") or ""
@@ -164,60 +159,130 @@ def post_scheduled_tweet(tweet_format: str = "single") -> None:
         ranked.append((_score_article(article), article))
 
     if not ranked:
-        logger.warning("No new articles after deduplication; skipping")
-        return
+        logger.warning("No new articles after deduplication")
+        return None
 
     ranked.sort(key=lambda item: item[0], reverse=True)
     best_pool = [a for _, a in ranked[:_BEST_POOL_SIZE]]
-    chosen = random.choice(best_pool)
+    return random.choice(best_pool)
 
-    title = chosen["title"]
-    url = chosen.get("url") or ""
-    summary = chosen.get("summary") or ""
+
+def post_scheduled_tweet() -> None:
+    """Fetch, score, compose, and post one tweet.
+
+    Content type is determined by content_router based on time-of-day,
+    daily ratio targets, anti-repeat rules, and remaining budget.
+    """
+    dry_run = os.getenv("DRY_RUN") == "1"
+
+    # ---- Budget check -------------------------------------------------------
+    budget_left = remaining_today()
+    ok, reason = can_post(units=1)
+    if not ok:
+        logger.warning("Skipping slot: %s", reason)
+        return
+
+    # ---- Decide content type ------------------------------------------------
+    content_type, thread_length = decide_content_type(budget_remaining=budget_left)
+
+    # Thread needs at least (thread_length + 1) budget units
+    if content_type == "thread":
+        needed = thread_length + 1
+        ok, reason = can_post(units=needed)
+        if not ok:
+            logger.warning("Downgrading thread to hot_take: %s", reason)
+            content_type = "hot_take"
+            thread_length = 1
+
+    # ---- Hook selection -----------------------------------------------------
+    last_hook = get_last_hook_pattern()
+    hook_pattern, hook_opener = pick_hook_pattern(exclude=last_hook)
+
+    logger.info(
+        "Starting scheduled post: type=%s thread_len=%d hook=%s dry_run=%s",
+        content_type, thread_length, hook_pattern, dry_run,
+    )
+
+    # ---- Article selection --------------------------------------------------
+    chosen = _pick_article()
+    if not chosen:
+        logger.warning("No suitable article found; skipping slot")
+        return
+
+    title    = chosen["title"]
+    url      = chosen.get("url") or ""
+    summary  = chosen.get("summary") or ""
+    cfg = TweetConfig()
 
     logger.info("Selected article: %s", title)
 
+    # ---- Compose and post ---------------------------------------------------
     try:
-        if tweet_format == "numbered_thread":
-            hook, context = craft_thread_pair(headline=title, summary=summary)
-            tweet_id = post_single_with_retry(text=hook)
-            if tweet_id and tweet_id != "0":
-                post_single_with_retry(
-                    text=context,
-                    in_reply_to_tweet_id=tweet_id,
-                )
-            logger.info(
-                "Posted thread",
-                extra={
-                    "article_title": title,
-                    "tweet_chars": len(hook),
-                    "format_type": "numbered_thread",
-                    "dry_run": dry_run,
-                },
+        if content_type == "thread":
+            tweets = craft_full_thread(
+                headline=title,
+                summary=summary,
+                thread_length=thread_length,
+                config=cfg,
+                hook_pattern=hook_pattern,
+                hook_opener=hook_opener,
             )
+            thread_id = str(uuid.uuid4())
+            prev_tweet_id: str | None = None
+            for pos, tweet_text in enumerate(tweets, start=1):
+                tweet_id = post_single_with_retry(
+                    text=tweet_text,
+                    in_reply_to_tweet_id=prev_tweet_id,
+                )
+                log_post(
+                    content_type="thread",
+                    tweet_text=tweet_text,
+                    hook_pattern=hook_pattern if pos == 1 else None,
+                    thread_id=thread_id,
+                    thread_position=pos,
+                    article_title=title,
+                    dry_run=dry_run,
+                )
+                prev_tweet_id = tweet_id if (tweet_id and tweet_id != "0") else None
+            logger.info("Posted %d-tweet thread for: %s", len(tweets), title)
+
         else:
+            # Map content type to tweet_format for craft_tweet
+            fmt_map = {
+                "hot_take":        "hot_take",
+                "question_poll":   "question_poll",
+                "engagement_bait": "engagement_bait",
+            }
+            tweet_format = fmt_map.get(content_type, "single")
             text = craft_tweet(
                 headline=title,
                 summary=summary,
                 tweet_format=tweet_format,
+                config=cfg,
+                hook_opener=hook_opener if content_type == "hot_take" else "",
             )
             post_single_with_retry(text=text)
-            logger.info(
-                "Posted tweet",
-                extra={
-                    "article_title": title,
-                    "tweet_chars": len(text),
-                    "format_type": tweet_format,
-                    "dry_run": dry_run,
-                },
+            log_post(
+                content_type=content_type,
+                tweet_text=text,
+                hook_pattern=hook_pattern,
+                article_title=title,
+                dry_run=dry_run,
             )
+            logger.info("Posted %s (%d chars): %s", content_type, len(text), title)
+
     except Exception:
         logger.exception("post_scheduled_tweet failed for article: %s", title)
         return
 
-    # Mark as posted only after a successful (or dry-run) attempt
+    # ---- Post-success bookkeeping -------------------------------------------
     if url:
         mark_posted(url)
+
+    try:
+        save_daily_checklist(get_daily_count(), get_monthly_count())
+    except Exception:
+        logger.debug("Could not save daily checklist", exc_info=True)
 
 
 # ---------------------------------------------------------------------------

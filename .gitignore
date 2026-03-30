@@ -1,4 +1,9 @@
 media_cards/
 __pycache__/
 .env
+bot.db
+posted_ids.json
+checklist_*.txt
+logs/
+failed_queue.csv
 

@@ -132,6 +132,28 @@ _FORMAT_STYLES = {
         "to drive replies, such as 'Agree or disagree?' or 'What do you think?'. "
         "Do NOT end with a period after the question mark."
     ),
+    # --- new engagement formats ---
+    "hot_take": (
+        "Write a strong, punchy opinion. The hook opener is provided — start "
+        "with it exactly, then deliver the take in 1-2 sentences. Make it "
+        "provocative but grounded. End with 'Agree or disagree?' or 'Am I wrong?'. "
+        "Under 240 characters."
+    ),
+    "question_poll": (
+        "Write a debate-inviting tweet using ONE of these formats:\n"
+        "  A) 'Which is worse: [X] or [Y]?'\n"
+        "  B) 'Am I wrong for thinking [opinion]?'\n"
+        "  C) 'Name a more [negative trait] [thing] than [example]... I'll wait.'\n"
+        "Pick whichever fits the headline best. Under 200 characters."
+    ),
+    "engagement_bait": (
+        "Write a short engagement-bait tweet using ONE of these formats:\n"
+        "  A) Fill-in-blank: 'When [related situation], Americans _____'\n"
+        "  B) 'One word to describe [topic]:'\n"
+        "  C) 'Wrong answers only: [political topic] is _____'\n"
+        "  D) 'Quote tweet with your take.'\n"
+        "Pick whichever fits best. Keep it punchy — under 130 characters."
+    ),
 }
 
 _URGENCY_WORDS = frozenset(
@@ -152,6 +174,14 @@ _QUESTION_CTAS = [
     "What do you think?",
     "Sound off below.",
     "Change my mind.",
+]
+
+THREAD_CTAS = [
+    "Follow @PatriotLens for daily truth the mainstream won't touch.",
+    "Retweet if you're tired of the media spin. Follow @PatriotLens.",
+    "More threads like this daily. Follow @PatriotLens and stay informed.",
+    "Share this if you think Americans deserve the full story. @PatriotLens",
+    "Follow @PatriotLens — we cover what the corporate press buries.",
 ]
 
 
@@ -208,6 +238,9 @@ def _has_urgency(headline: str) -> bool:
 
 def _choose_format_style(headline: str, tweet_format: str) -> str:
     """Pick a format style string based on requested format and headline content."""
+    # Direct pass-through for Phase 3 content types
+    if tweet_format in ("hot_take", "question_poll", "engagement_bait"):
+        return tweet_format
     if tweet_format == "question_cta":
         return "question_cta"
     if _has_urgency(headline):
@@ -296,14 +329,18 @@ def _build_messages(
     summary: str,
     cfg: TweetConfig,
     format_style: str,
+    hook_opener: str = "",
 ) -> List[dict]:
     """Build LLM messages for a single tweet."""
     format_instruction = _FORMAT_STYLES.get(format_style, _FORMAT_STYLES["bold_statement"])
     style_nudge = random.choice(_STYLE_ANGLES)
 
+    hook_line = f'Hook opener (start with this exact text): "{hook_opener}"\n' if hook_opener else ""
+
     user_prompt = (
         f'Headline: "{headline}"\n'
-        f'Summary: "{summary or ""}"\n\n'
+        f'Summary: "{summary or ""}"\n'
+        f"{hook_line}\n"
         f"Format instruction: {format_instruction}\n"
         f"Additional style nudge: {style_nudge}\n\n"
         f"Tone: {cfg.tone}.\n"
@@ -537,6 +574,7 @@ def craft_tweet(
     url: str = "",
     config: Optional[TweetConfig] = None,
     tweet_format: str = "single",
+    hook_opener: str = "",
 ) -> str:
     """Craft an on-brand, engagement-optimised tweet.
 
@@ -558,7 +596,7 @@ def craft_tweet(
     candidates: List[Tuple[float, str]] = []
 
     for _ in range(candidate_count):
-        messages = _build_messages(headline, summary, cfg, format_style)
+        messages = _build_messages(headline, summary, cfg, format_style, hook_opener=hook_opener)
         raw = _generate_candidate(messages, cfg)
         logger.debug("LLM raw output: %r", raw)
         cleaned = _clean_llm_output(raw, cfg.include_emojis)
@@ -642,6 +680,133 @@ def craft_thread_pair(
 
     context = _trim_to_length(context, tags, 280, url=url)
     return (hook, context)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: variable-length thread composer
+# ---------------------------------------------------------------------------
+
+def _build_thread_body_messages(
+    headline: str,
+    summary: str,
+    cfg: TweetConfig,
+    tweet_num: int,
+    total_body: int,
+    hook_text: str,
+    prev_text: str = "",
+) -> List[dict]:
+    """Build LLM messages for one body tweet in an N-tweet thread."""
+    position = f"tweet {tweet_num} of {total_body} body tweets"
+    if tweet_num == 1:
+        instruction = (
+            f"Write the HOOK ({position}). Make it punchy and provocative — "
+            "a strong claim or rhetorical question that makes readers scroll. "
+            "Under 260 characters. No hashtags."
+        )
+        context = f'Headline: "{headline}"\nSummary: "{summary or ""}"\n'
+    else:
+        instruction = (
+            f"Write {position}. Build on the previous tweet — add one concrete "
+            "fact, implication, or example. Each tweet must stand alone. "
+            "Under 260 characters. No hashtags."
+        )
+        context = (
+            f'Headline: "{headline}"\n'
+            f'Summary: "{summary or ""}"\n'
+            f'Hook tweet: "{hook_text}"\n'
+            + (f'Previous tweet: "{prev_text}"\n' if prev_text else "")
+        )
+
+    user_prompt = (
+        f"{context}\n"
+        f"Instruction: {instruction}\n"
+        f"Tone: {cfg.tone}.\n"
+        f"Output ONLY the tweet text.\n"
+    )
+    return [
+        {"role": "system", "content": THREAD_SYSTEM_PROMPT},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def craft_full_thread(
+    headline: str,
+    summary: str = "",
+    thread_length: int = 3,
+    handle: str = "PatriotLens",
+    config: Optional[TweetConfig] = None,
+    hook_pattern: str = "",
+    hook_opener: str = "",
+) -> List[str]:
+    """Craft a variable-length thread: body tweets + CTA tweet.
+
+    Args:
+        headline:      News headline.
+        summary:       Article description for context.
+        thread_length: Number of body tweets (3–5). CTA is always appended.
+        handle:        Twitter handle for CTA (without @).
+        config:        TweetConfig; uses defaults if None.
+        hook_pattern:  Name of hook pattern (informational only, not used here).
+        hook_opener:   Exact opener text to prepend to tweet 1.
+
+    Returns:
+        List of tweet strings: [body_1, ..., body_N, cta_tweet]
+        Total length = thread_length + 1.
+    """
+    cfg = config or TweetConfig()
+    body_count = max(1, thread_length)
+    tweets: List[str] = []
+
+    for i in range(1, body_count + 1):
+        prev = tweets[-1] if tweets else ""
+        hook = tweets[0] if tweets else ""
+        candidates: List[Tuple[float, str]] = []
+        for _ in range(max(1, cfg.candidate_count // 2)):
+            msgs = _build_thread_body_messages(
+                headline, summary, cfg,
+                tweet_num=i,
+                total_body=body_count,
+                hook_text=hook,
+                prev_text=prev,
+            )
+            raw = _generate_candidate(msgs, cfg)
+            cleaned = _clean_llm_output(raw, cfg.include_emojis)
+            # Prepend hook opener to first body tweet if provided
+            if i == 1 and hook_opener and not cleaned.lower().startswith(hook_opener.lower()):
+                cleaned = f"{hook_opener} {cleaned}".strip()
+            candidates.append((_score_candidate(cleaned, headline, summary, cfg), cleaned))
+        candidates.sort(key=lambda c: c[0], reverse=True)
+        tweet_text = candidates[0][1]
+        if not tweet_text:
+            tweet_text = _sanitize(headline[:260])
+        tweets.append(tweet_text[:260])
+
+    # CTA tweet — pick a variant that uses the actual handle
+    cta_options = THREAD_CTAS if handle == "PatriotLens" else [
+        f"Follow @{handle} for daily coverage the mainstream won't touch.",
+        f"Retweet if you agree. Follow @{handle} for more.",
+        f"More threads like this every day. Follow @{handle}.",
+    ]
+    # Add hashtags to CTA
+    tags: List[str] = []
+    if cfg.allow_hashtags and cfg.max_hashtags > 0:
+        seed = list(dict.fromkeys(cfg.trending_keywords + cfg.brand_hashtags))
+        topical = _infer_topical_tags(
+            text=f"{headline} {summary}",
+            limit=cfg.max_hashtags,
+            seed_tags=seed,
+        )
+        tags = list(dict.fromkeys(t for t in topical if t.startswith("#")))[: cfg.max_hashtags]
+
+    cta_base = random.choice(cta_options)
+    cta_tweet = _trim_to_length(cta_base, tags, 280)
+    tweets.append(cta_tweet)
+
+    logger.info(
+        "craft_full_thread: %d body + 1 CTA tweets for %r",
+        body_count, headline[:60],
+    )
+    return tweets
 
 
 # ---------------------------------------------------------------------------

@@ -1,16 +1,13 @@
 """APScheduler daemon for Patriot Lens Bot.
 
-Default posting schedule (Eastern):
-  07:00  single          — morning commute
-  11:30  question_cta    — late morning
-  13:00  single          — lunch
-  17:30  question_cta    — end of workday
-  21:00  numbered_thread — prime evening
+17 daily posting slots (Eastern) — content_router decides format per slot:
+
+  07:00  08:00  08:55  09:50  11:00  12:05  13:00  14:00  15:00
+  16:00  17:05  18:00  18:55  19:55  20:50  21:45  22:40
 
 Override posting times with the POSTING_TIMES env var (comma-separated HH:MM,
-e.g. "07:00,11:30,13:00,17:30,21:00").  Format rotation adapts automatically:
-the last slot is always numbered_thread; even-indexed slots are single;
-odd-indexed slots are question_cta.
+e.g. "07:00,09:00,12:00").  Content type is always determined by content_router
+at post time — no per-slot format assignment.
 
 Only POST /2/tweets is used.  No Twitter read endpoints.
 """
@@ -33,48 +30,38 @@ from bot_auto import post_scheduled_tweet  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-# Jitter keeps posts from landing at the exact same second every day,
-# reducing the automation signal to Twitter's systems.
-_JITTER_SECONDS = 10 * 60  # up to 10 minutes
+# Jitter: 5–15 minutes in seconds (avoids automation fingerprint)
+_JITTER_SECONDS = 10 * 60  # up to 10 min jitter around each slot
 
-# Default time slots and their tweet formats
-_DEFAULT_SLOTS: list[tuple[str, str]] = [
-    ("07:00", "single"),
-    ("11:30", "question_cta"),
-    ("13:00", "single"),
-    ("17:30", "question_cta"),
-    ("21:00", "numbered_thread"),
+# 17 slots spread across the day (Eastern).
+# Gaps are intentionally uneven to avoid a mechanical pattern.
+_DEFAULT_SLOTS: list[str] = [
+    "07:00",
+    "08:00",
+    "08:55",
+    "09:50",
+    "11:00",
+    "12:05",
+    "13:00",
+    "14:00",
+    "15:00",
+    "16:00",
+    "17:05",
+    "18:00",
+    "18:55",
+    "19:55",
+    "20:50",
+    "21:45",
+    "22:40",
 ]
 
 
-def _parse_posting_times(raw: str) -> list[tuple[str, str]]:
-    """Parse POSTING_TIMES env var into [(HH:MM, format), ...].
-
-    Format rotation:
-      - Last slot  -> numbered_thread
-      - Odd index  -> question_cta
-      - Even index -> single
-    """
-    times = [t.strip() for t in raw.split(",") if t.strip()]
-    if not times:
-        return _DEFAULT_SLOTS
-
-    result: list[tuple[str, str]] = []
-    last_idx = len(times) - 1
-    for i, t in enumerate(times):
-        if i == last_idx:
-            fmt = "numbered_thread"
-        elif i % 2 == 1:
-            fmt = "question_cta"
-        else:
-            fmt = "single"
-        result.append((t, fmt))
-    return result
-
-
-def _resolve_slots() -> list[tuple[str, str]]:
+def _resolve_slots() -> list[str]:
     raw = os.getenv("POSTING_TIMES", "").strip()
-    return _parse_posting_times(raw) if raw else _DEFAULT_SLOTS
+    if raw:
+        slots = [t.strip() for t in raw.split(",") if t.strip()]
+        return slots if slots else _DEFAULT_SLOTS
+    return _DEFAULT_SLOTS
 
 
 def schedule_jobs() -> None:
@@ -89,7 +76,7 @@ def schedule_jobs() -> None:
 
     slots = _resolve_slots()
     logger.info("Scheduling %d daily posting slots (Eastern):", len(slots))
-    for slot_time, slot_format in slots:
+    for slot_time in slots:
         try:
             hour_str, minute_str = slot_time.split(":")
             hour, minute = int(hour_str), int(minute_str)
@@ -97,22 +84,17 @@ def schedule_jobs() -> None:
             logger.error("Invalid time in POSTING_TIMES: %r — skipping", slot_time)
             continue
 
-        job_id = f"tweet_{slot_time.replace(':', '')}_{slot_format}"
-        # Wrap in a closure to capture the current format value
-        def _make_job(fmt: str = slot_format):
-            def _job() -> None:
-                post_scheduled_tweet(tweet_format=fmt)
-            return _job
+        job_id = f"tweet_{slot_time.replace(':', '')}"
 
         sched.add_job(
-            _make_job(),
+            post_scheduled_tweet,
             trigger="cron",
             hour=hour,
             minute=minute,
             jitter=_JITTER_SECONDS,
             id=job_id,
         )
-        logger.info("  %s Eastern — format=%s (id=%s)", slot_time, slot_format, job_id)
+        logger.info("  %s Eastern (id=%s)", slot_time, job_id)
 
     sched.start()
 
